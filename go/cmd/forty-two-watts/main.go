@@ -94,8 +94,6 @@ func main() {
 		}
 	}
 
-	// ---- Auto-generate EV charger driver from high-level config ----
-	cfg.InjectEVChargerDriver()
 	cfg.ResolveDriverPaths(filepath.Dir(*configPath))
 
 	// ---- Telemetry store ----
@@ -194,9 +192,7 @@ func main() {
 					newCfg.EVCharger.Password = pw
 				}
 			}
-			// Regenerate the synthetic EV charger driver entry from the
-			// high-level ev_charger config, matching what main() does at startup.
-			newCfg.InjectEVChargerDriver()
+			// Resolve relative driver paths against config directory.
 			newCfg.ResolveDriverPaths(filepath.Dir(*configPath))
 			reg.Reload(ctx, newCfg.Drivers)
 			// Refresh capacities — mutate the existing map in place so
