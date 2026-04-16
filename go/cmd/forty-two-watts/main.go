@@ -96,6 +96,7 @@ func main() {
 
 	// ---- Auto-generate EV charger driver from high-level config ----
 	cfg.InjectEVChargerDriver()
+	cfg.ResolveDriverPaths(filepath.Dir(*configPath))
 
 	// ---- Telemetry store ----
 	tel := telemetry.NewStore()
@@ -156,10 +157,6 @@ func main() {
 	reg.ARPLookup = arp.Lookup
 	// Spawn initial drivers
 	for _, d := range cfg.Drivers {
-		// Resolve relative WASM paths against config dir
-		if d.WASM != "" && !filepath.IsAbs(d.WASM) {
-			d.WASM = filepath.Join(filepath.Dir(*configPath), d.WASM)
-		}
 		if err := reg.Add(ctx, d); err != nil {
 			slog.Warn("failed to spawn driver", "name", d.Name, "err", err)
 		}
@@ -200,12 +197,7 @@ func main() {
 			// Regenerate the synthetic EV charger driver entry from the
 			// high-level ev_charger config, matching what main() does at startup.
 			newCfg.InjectEVChargerDriver()
-			// Resolve relative paths
-			for i := range newCfg.Drivers {
-				if newCfg.Drivers[i].WASM != "" && !filepath.IsAbs(newCfg.Drivers[i].WASM) {
-					newCfg.Drivers[i].WASM = filepath.Join(filepath.Dir(*configPath), newCfg.Drivers[i].WASM)
-				}
-			}
+			newCfg.ResolveDriverPaths(filepath.Dir(*configPath))
 			reg.Reload(ctx, newCfg.Drivers)
 			// Refresh capacities — mutate the existing map in place so
 			// Deps.Capacities (a map header captured at init) sees the
@@ -398,8 +390,9 @@ func main() {
 		MPC:        mpcSvc,
 		PVModel:    pvSvc,
 		LoadModel:  loadSvc,
-		HA:         haBridge,
-		Version:    Version,
+		HA:             haBridge,
+		DriverRegistry: reg,
+		Version:        Version,
 	}
 	srv := api.New(deps)
 	httpSrv := &http.Server{

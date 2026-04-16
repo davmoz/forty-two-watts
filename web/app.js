@@ -1281,8 +1281,64 @@
     setPeakLimit(Number(peakLimitSlider.value));
   });
 
-  // EV slider removed — ev_charging_w now comes from the Easee driver.
-  // Manual override still available via /api/ev_charging (debug only).
+  // EV detail modal
+  var evModal = document.getElementById("ev-modal");
+  var evModalBody = document.getElementById("ev-modal-body");
+  var evModalClose = document.getElementById("ev-modal-close");
+  var cardEv = document.getElementById("card-ev");
+
+  function refreshEvModal() {
+    fetch("/api/ev/status").then(function (r) { return r.json(); }).then(function (d) {
+      if (!d || d.connected === false) {
+        evModalBody.innerHTML = '<p style="color:var(--text-dim)">No EV charger connected</p>';
+        return;
+      }
+      var status = d.charging ? "Charging" : (d.connected ? "Connected" : "Idle");
+      var rows = [
+        ["Status", status],
+        ["Power", formatW(d.w || 0)],
+      ];
+      if (d.session_wh != null) rows.push(["Session", (d.session_wh / 1000).toFixed(1) + " kWh"]);
+      if (d.driver) rows.push(["Driver", d.driver]);
+      var html = '<table style="width:100%;border-collapse:collapse">';
+      rows.forEach(function (r) {
+        html += '<tr><td style="padding:0.3rem 0;color:var(--text-dim)">' + r[0] + '</td><td style="padding:0.3rem 0;text-align:right;font-weight:600">' + r[1] + '</td></tr>';
+      });
+      html += '</table>';
+      evModalBody.innerHTML = html;
+    }).catch(function () {
+      evModalBody.innerHTML = '<p style="color:var(--text-dim)">Failed to load EV status</p>';
+    });
+  }
+
+  var evRefreshTimer = null;
+  if (cardEv && evModal) {
+    cardEv.addEventListener("click", function () {
+      evModal.classList.remove("hidden");
+      refreshEvModal();
+      evRefreshTimer = setInterval(refreshEvModal, 5000);
+    });
+    function closeEvModal() {
+      evModal.classList.add("hidden");
+      if (evRefreshTimer) { clearInterval(evRefreshTimer); evRefreshTimer = null; }
+    }
+    evModalClose.addEventListener("click", closeEvModal);
+    evModal.addEventListener("click", function (e) {
+      if (e.target === evModal) closeEvModal();
+    });
+
+    function evCommand(action, btn) {
+      btn.disabled = true;
+      postJson("/api/ev/command", { action: action });
+      setTimeout(function () { refreshEvModal(); btn.disabled = false; }, 3000);
+    }
+    var evBtnStart = document.getElementById("ev-btn-start");
+    var evBtnPause = document.getElementById("ev-btn-pause");
+    var evBtnResume = document.getElementById("ev-btn-resume");
+    evBtnStart.addEventListener("click", function () { evCommand("ev_start", evBtnStart); });
+    evBtnPause.addEventListener("click", function () { evCommand("ev_pause", evBtnPause); });
+    evBtnResume.addEventListener("click", function () { evCommand("ev_resume", evBtnResume); });
+  }
 
   // Click-to-toggle legend items. Each item has data-toggle with a
   // key; clicking toggles visibility of the matching series and

@@ -110,17 +110,34 @@ local function get_chargers()
     return host.json_decode(resp), nil
 end
 
-local function get_state(serial)
-    local resp, err = host.http_get(
-        BASE_URL .. "/chargers/" .. serial .. "/state",
-        auth_headers()
-    )
+-- Observation IDs (from developer.easee.com/docs/charger-observation-ids)
+local OBS_OP_MODE        = 109
+local OBS_TOTAL_POWER    = 120
+local OBS_SESSION_ENERGY = 121
+local OBS_LIFETIME_ENERGY = 124
+local OBS_VOLTAGE        = 194
+local OBS_CURRENT        = 183
+
+local OBS_IDS = "109,120,121,124,194,183"
+
+local function get_observations(serial)
+    local url = "https://api.easee.com/state/" .. serial .. "/observations?ids=" .. OBS_IDS
+    local resp, err = host.http_get(url, auth_headers())
     if err then return nil, err end
-    return host.json_decode(resp), nil
+    local decoded = host.json_decode(resp)
+    if not decoded then return nil, "decode failed" end
+    local list = decoded.observations or decoded
+    local obs = {}
+    for _, item in ipairs(list) do
+        if item.id then
+            obs[item.id] = tonumber(item.value) or item.value
+        end
+    end
+    return obs, nil
 end
 
 -- ---- State mapping ----
--- Easee chargerOpMode:
+-- Easee chargerOpMode (observation 109):
 --   1 = disconnected (standby)
 --   2 = awaiting start (connected, not charging)
 --   3 = charging
@@ -149,13 +166,13 @@ function driver_init(config)
 
     -- Auto-detect serial if not provided
     if not charger_serial then
-        local chargers, err = get_chargers()
-        if err or not chargers or #chargers == 0 then
-            host.log("error", "Easee: could not list chargers: " .. tostring(err))
+        local chargers, cerr = get_chargers()
+        if cerr or not chargers or #chargers == 0 then
+            host.log("error", "Easee: could not list chargers: " .. tostring(cerr))
             return
         end
         charger_serial = chargers[1].id
-        host.log("info", "Easee: auto-detected charger " .. charger_serial)
+        host.log("info", "Easee: auto-detected charger " .. tostring(charger_serial))
     end
 
     host.set_sn(charger_serial)
@@ -172,15 +189,15 @@ function driver_poll()
         return 10000
     end
 
-    local state, err = get_state(charger_serial)
-    if err or not state then
-        host.log("warn", "Easee: state poll failed: " .. tostring(err))
+    local obs, err = get_observations(charger_serial)
+    if err or not obs then
+        host.log("warn", "Easee: observations poll failed: " .. tostring(err))
         return 10000
     end
 
-    local op_mode = state.chargerOpMode or 1
-    local power_w = (state.totalPower or 0) * 1000  -- kW → W
-    local session_wh = (state.sessionEnergy or 0) * 1000  -- kWh → Wh
+    local op_mode = obs[OBS_OP_MODE] or 1
+    local power_w = (obs[OBS_TOTAL_POWER] or 0) * 1000  -- kW → W
+    local session_wh = (obs[OBS_SESSION_ENERGY] or 0) * 1000  -- kWh → Wh
     local connected = (op_mode >= 2 and op_mode <= 6)
     local charging = (op_mode == 3)
 
@@ -191,15 +208,14 @@ function driver_poll()
         session_wh = session_wh,
     })
 
-    -- Diagnostic metrics
-    if state.voltage then
-        host.emit_metric("ev_voltage_v", state.voltage)
+    if obs[OBS_VOLTAGE] then
+        host.emit_metric("ev_voltage_v", obs[OBS_VOLTAGE])
     end
-    if state.outputCurrent then
-        host.emit_metric("ev_current_a", state.outputCurrent)
+    if obs[OBS_CURRENT] then
+        host.emit_metric("ev_current_a", obs[OBS_CURRENT])
     end
-    if state.lifetimeEnergy then
-        host.emit_metric("ev_lifetime_kwh", state.lifetimeEnergy)
+    if obs[OBS_LIFETIME_ENERGY] then
+        host.emit_metric("ev_lifetime_kwh", obs[OBS_LIFETIME_ENERGY])
     end
 
     return 5000

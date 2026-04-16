@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -404,8 +405,15 @@ func Parse(data []byte, baseDir string) (*Config, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	// Resolve relative driver paths
+	c.ResolveDriverPaths(baseDir)
+	return &c, nil
+}
+
+// ResolveDriverPaths joins relative Lua/WASM driver paths with baseDir.
+func (c *Config) ResolveDriverPaths(baseDir string) {
 	for i := range c.Drivers {
+		c.Drivers[i].Lua = stripLeadingDotDot(c.Drivers[i].Lua)
+		c.Drivers[i].WASM = stripLeadingDotDot(c.Drivers[i].WASM)
 		if c.Drivers[i].WASM != "" && !filepath.IsAbs(c.Drivers[i].WASM) {
 			c.Drivers[i].WASM = filepath.Join(baseDir, c.Drivers[i].WASM)
 		}
@@ -413,7 +421,29 @@ func Parse(data []byte, baseDir string) (*Config, error) {
 			c.Drivers[i].Lua = filepath.Join(baseDir, c.Drivers[i].Lua)
 		}
 	}
-	return &c, nil
+}
+
+func stripLeadingDotDot(p string) string {
+	for strings.HasPrefix(p, "../") {
+		p = p[3:]
+	}
+	return p
+}
+
+// UnresolveDriverPaths converts resolved driver paths back to config-relative form.
+func (c *Config) UnresolveDriverPaths(baseDir string) {
+	for i := range c.Drivers {
+		if c.Drivers[i].Lua != "" {
+			if rel, err := filepath.Rel(baseDir, c.Drivers[i].Lua); err == nil {
+				c.Drivers[i].Lua = rel
+			}
+		}
+		if c.Drivers[i].WASM != "" {
+			if rel, err := filepath.Rel(baseDir, c.Drivers[i].WASM); err == nil {
+				c.Drivers[i].WASM = rel
+			}
+		}
+	}
 }
 
 // applyDefaults fills in sensible zero-value defaults.
