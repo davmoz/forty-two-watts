@@ -313,19 +313,22 @@
         driver.config = driver.config || {};
         driver.config.host = ip;
       }
-      // Persist per-driver secrets the prefill rendered (api_token, etc.)
-      // into driver.config.<key>. Empty values are skipped so we don't
-      // overwrite an existing value with blank when re-entering the wizard.
-      var secrets = (selectedCatalog && selectedCatalog.config_secrets) || [];
-      secrets.forEach(function (key) {
-        var el = document.getElementById('drv-secret-' + key);
-        if (!el) return;
-        var v = (el.value || '').trim();
-        if (v === '') return;
-        driver.config = driver.config || {};
-        driver.config[key] = v;
-      });
     }
+
+    // Persist per-driver secrets the prefill rendered (api_token, etc.)
+    // into driver.config.<key>. Lives OUTSIDE the protocol branches so
+    // a future Modbus/MQTT driver that declares config_secrets still
+    // captures them — the previous version silently dropped operator-
+    // entered secrets for any driver whose top-protocol wasn't http.
+    var secrets = (selectedCatalog && selectedCatalog.config_secrets) || [];
+    secrets.forEach(function (key) {
+      var el = document.getElementById('drv-secret-' + key);
+      if (!el) return;
+      var v = (el.value || '').trim();
+      if (v === '') return;
+      driver.config = driver.config || {};
+      driver.config[key] = v;
+    });
 
     // If this is the site meter, uncheck others
     if (isSiteMeter) {

@@ -169,6 +169,7 @@
     after: function (ctx) {
       var config = ctx.config;
       var bodyEl = ctx.bodyEl;
+      var escHtml = ctx.escHtml;
 
       // Driver catalog picker — fetch async, render into select.
       fetch("/api/drivers/catalog").then(function (r) { return r.json(); }).then(function (data) {
@@ -202,14 +203,33 @@
           var dcfg = d.config || {};
           var fs = '<fieldset><legend>Secrets</legend>';
           secrets.forEach(function (key) {
+            // Title-case, keep the raw key for the data-path attribute.
+            // BOTH go through ctx.escHtml — config_secrets ultimately
+            // comes from driver-authored Lua and a hostile/malformed
+            // key containing < or > would otherwise be parsed as
+            // markup when we innerHTML this fieldset. Same for the
+            // value-readback branch (paranoia: the masked placeholder
+            // is server-controlled, but a downstream change might
+            // make this user-controlled).
             var label = key.replace(/_/g, " ").replace(/\b\w/g, function (c) { return c.toUpperCase(); });
-            var v = dcfg[key] || "";
+            // Render the input EMPTY regardless of stored value — the
+            // value coming back from /api/config is the masked
+            // placeholder anyway (api masks driver config_secrets on
+            // GET), but inserting any value into a `value=""` attribute
+            // exposes it in the DOM/HTML. Mirror the cloud-password
+            // pattern instead: empty input + saved/missing badge.
+            var saved = typeof dcfg[key] === "string" && dcfg[key] !== "";
+            var badge = saved
+              ? '<span class="creds-badge creds-saved">✓ Saved</span>'
+              : '<span class="creds-badge creds-missing">⚠ Not saved</span>';
+            var placeholder = saved
+              ? "•••••••• (leave empty to keep)"
+              : "Paste from device web UI";
             fs +=
-              '<label>' + label + '</label>' +
+              '<label>' + escHtml(label) + ' ' + badge + '</label>' +
               '<input type="password" autocomplete="off" ' +
-              'data-path="drivers.' + dIdx + '.config.' + key + '" ' +
-              'value="' + (v ? v.replace(/"/g, "&quot;") : "") + '" ' +
-              'placeholder="Paste from device web UI">';
+              'data-path="drivers.' + dIdx + '.config.' + escHtml(key) + '" ' +
+              'value="" placeholder="' + escHtml(placeholder) + '">';
           });
           fs += '</fieldset>';
           slot.innerHTML = fs;
