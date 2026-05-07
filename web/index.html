@@ -175,6 +175,15 @@
         <div class="card-value val-neutral" id="load-w">-- W</div>
         <div class="card-sub">house</div>
       </div>
+      <!-- EV tile — mirrors the energy-flow's EV planet so tile-mode
+           operators can reach the EV charging modal too. Click opens
+           #ev-modal (same modal the planet click opens). When no EV
+           is connected the value reads "—" and the click is a no-op. -->
+      <div class="card summary-card ftw-hide-in-hero" id="card-ev">
+        <div class="card-label">EV</div>
+        <div class="card-value val-neutral" id="card-ev-w">-- W</div>
+        <div class="card-sub" id="card-ev-sub">charger</div>
+      </div>
     </section>
 
 
@@ -341,6 +350,15 @@
           </div>
           <div class="plan-actions">
             <span id="plan-summary" class="plan-summary">…</span>
+            <!-- Horizon toggle. Mirrors the price chart's 3-position
+                 pill so operators have a consistent affordance across
+                 both charts. Today / +Tomorrow / Tomorrow. Persisted
+                 to localStorage in plan.js. -->
+            <div id="plan-horizon" class="toggle plan-horizon" role="tablist" data-horizon="all">
+              <button type="button" data-horizon="today">Today</button>
+              <button type="button" data-horizon="all" class="active" aria-selected="true">+ Tomorrow</button>
+              <button type="button" data-horizon="tomorrow">Tomorrow</button>
+            </div>
             <button id="plan-replan" class="btn-send" title="Force a fresh plan">Replan</button>
           </div>
         </div>

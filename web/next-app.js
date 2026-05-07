@@ -385,6 +385,19 @@
     // Load
     loadW.textContent = formatW(data.load_w || 0);
 
+    // EV tile (tile-mode parity with the energy-flow's EV planet).
+    // Reads ev_charging_w (post sub-watt floor in /api/status); the
+    // sub-card label flips to "charging" when active so the tile reads
+    // the same way the planet does.
+    var cardEvWEl   = document.getElementById("card-ev-w");
+    var cardEvSubEl = document.getElementById("card-ev-sub");
+    if (cardEvWEl) {
+      var evWNow = data.ev_charging_w || 0;
+      cardEvWEl.textContent = formatW(evWNow);
+      cardEvWEl.className = evWNow > 1 ? "card-value val-load" : "card-value val-neutral";
+      if (cardEvSubEl) cardEvSubEl.textContent = evWNow > 1 ? "charging" : "charger";
+    }
+
     // Battery — positive=charge, negative=discharge
     batW.textContent = formatW(data.bat_w);
     if (data.bat_w > 10) {
@@ -847,6 +860,19 @@
     var dpr = window.devicePixelRatio || 1;
     var w = canvas.parentElement.clientWidth - 32;
     var h = 300;
+    // Small-screen sizing for canvas-rendered axes + the NOW marker.
+    // Canvas text doesn't honour CSS @media queries, so we branch in
+    // JS — same threshold as ftw-price-chart (600 px) for consistency.
+    // Fonts scale ~50 % up; the now-line stroke doubles. The values
+    // below are read by every ctx.font / ctx.lineWidth assignment in
+    // this function via the chartFont* / chartLine* variables.
+    var smallScreen = window.matchMedia &&
+      window.matchMedia("(max-width: 600px)").matches;
+    var chartFontAxis     = smallScreen ? "16px monospace" : "11px monospace";
+    var chartFontWaiting  = smallScreen ? "18px monospace" : "12px monospace";
+    var chartFontTooltip  = smallScreen ? "14px monospace" : "10px monospace";
+    var chartFontTooltipS = smallScreen ? "13px monospace" : "9px monospace";
+    var chartNowStrokeW   = smallScreen ? 2 : 1;
     if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
       canvas.width = w * dpr;
       canvas.height = h * dpr;
@@ -931,7 +957,7 @@
       // Empty state — draw axes + "waiting for data" hint
       ctx.clearRect(0, 0, w, h);
       ctx.fillStyle = "#666";
-      ctx.font = "12px monospace";
+      ctx.font = chartFontWaiting;
       ctx.textAlign = "center";
       ctx.fillText("waiting for data...", w / 2, h / 2);
       ctx.textAlign = "left";
@@ -980,7 +1006,7 @@
     // number — that's what lets the y-axis labels stay readable.
     ctx.strokeStyle = "#2a2a2a";
     ctx.lineWidth = 0.5;
-    ctx.font = "11px monospace";
+    ctx.font = chartFontAxis;
     var steps = Math.round(yRange / yStep);
     for (var i = 0; i <= steps; i++) {
       var y = pad.top + plotH - (plotH * i / steps);
@@ -1156,10 +1182,12 @@
     });
     ctx.globalAlpha = 1;
 
-    // Subtle vertical "now" line — anchor point so the eye knows where present is
+    // Subtle vertical "now" line — anchor point so the eye knows
+    // where present is. Stroke width bumps on small screens so the
+    // marker stays visible alongside the larger axis labels.
     var nowX = pad.left + plotW;
-    ctx.strokeStyle = "rgba(255,255,255,0.12)";
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = smallScreen ? "rgba(255,255,255,0.30)" : "rgba(255,255,255,0.12)";
+    ctx.lineWidth = chartNowStrokeW;
     ctx.beginPath();
     ctx.moveTo(nowX, pad.top);
     ctx.lineTo(nowX, pad.top + plotH);
@@ -1167,7 +1195,7 @@
 
     // Y-axis labels (outside clip so they're fully visible)
     ctx.fillStyle = "#888";
-    ctx.font = "11px monospace";
+    ctx.font = chartFontAxis;
     for (var i2 = 0; i2 <= steps; i2++) {
       var yVal = yMin + (yRange * i2 / steps);
       var ly = pad.top + plotH - (plotH * i2 / steps);
@@ -1200,7 +1228,7 @@
       ctx.beginPath();
       ctx.arc(w - pad.right - 78, pad.top + 4, 2.5, 0, Math.PI * 2);
       ctx.fill();
-      ctx.font = "10px monospace";
+      ctx.font = chartFontTooltip;
       ctx.fillStyle = fresh ? "#aaa" : "#f59e0b";
       ctx.fillText(ageStr, w - pad.right - 70, pad.top + 8);
     }
@@ -1307,7 +1335,7 @@
     ctx.fillRect(boxX, boxY, boxW, boxH);
     ctx.strokeRect(boxX, boxY, boxW, boxH);
 
-    ctx.font = "10px monospace";
+    ctx.font = chartFontTooltip;
     ctx.fillStyle = "#888";
     ctx.fillText(timeStr, boxX + 6, boxY + lineHeight - 2);
 
@@ -1331,9 +1359,9 @@
         if (lab.target && i < lab.target.length && Math.abs(lab.target[i]) > 1) {
           var actualW = ctx.measureText(actual).width;
           ctx.fillStyle = "#888";
-          ctx.font = "9px monospace";
+          ctx.font = chartFontTooltipS;
           ctx.fillText("→ " + formatW(lab.target[i]), boxX + boxW - 10 - actualW, y);
-          ctx.font = "10px monospace";
+          ctx.font = chartFontTooltip;
         }
       }
       ctx.textAlign = "left";
@@ -1380,7 +1408,7 @@
     ctx.fillRect(boxX, boxY, boxW, boxH);
     ctx.strokeRect(boxX, boxY, boxW, boxH);
 
-    ctx.font = "10px monospace";
+    ctx.font = chartFontTooltip;
     var d = new Date(ts);
     var hh = d.getHours().toString().padStart(2, "0") + ":" + d.getMinutes().toString().padStart(2, "0");
     ctx.fillStyle = "#fbbf24";
@@ -2115,6 +2143,21 @@
       cardBat.addEventListener("click", openBat);
       cardBat.addEventListener("keydown", function (e) {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openBat(); }
+      });
+    }
+    var cardEv = document.getElementById("card-ev");
+    if (cardEv && typeof openEvModal === "function") {
+      cardEv.classList.add("clickable");
+      cardEv.setAttribute("role", "button");
+      cardEv.setAttribute("tabindex", "0");
+      cardEv.setAttribute("aria-label", "Open EV charger");
+      // Pass null so openEvModal aggregates across all EV drivers —
+      // matches the no-driver-scoping fallback the planet click uses
+      // when the operator hasn't picked a specific charger.
+      var openEv = function () { openEvModal(null); };
+      cardEv.addEventListener("click", openEv);
+      cardEv.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openEv(); }
       });
     }
 

@@ -13,7 +13,39 @@
     plan: null,
     fuse: null,         // { max_amps, phases, voltage } — drives the power y-axis
     lastUpdate: null,
+    horizon: readHorizonPref(),  // "today" | "all" | "tomorrow"
   };
+
+  // Horizon controls the x-axis bounds; mirrors the price chart's
+  // 3-position pill so operators have a consistent affordance across
+  // both charts. Persisted in localStorage so a user who prefers
+  // "Today only" doesn't have to re-pick on every reload.
+  const HORIZON_PREF_KEY = "ftw.planChart.horizon";
+  function readHorizonPref() {
+    try {
+      const v = localStorage.getItem(HORIZON_PREF_KEY);
+      return (v === "today" || v === "all" || v === "tomorrow") ? v : "all";
+    } catch (e) { return "all"; }
+  }
+  function writeHorizonPref(v) {
+    try { localStorage.setItem(HORIZON_PREF_KEY, v); } catch (e) {}
+  }
+  function localMidnight(offsetDays) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.getTime() + (offsetDays || 0) * 24 * 60 * 60 * 1000;
+  }
+  function horizonBounds(horizon) {
+    const now = Date.now();
+    if (horizon === "today") {
+      return { tMin: now - 30 * 60 * 1000, tMax: localMidnight(1) };
+    }
+    if (horizon === "tomorrow") {
+      return { tMin: localMidnight(1), tMax: localMidnight(2) };
+    }
+    // "all" — current default: now-30 min through next 48 h.
+    return { tMin: now - 30 * 60 * 1000, tMax: now + 48 * 60 * 60 * 1000 };
+  }
 
   async function fetchAll() {
     const [p, f, m, c] = await Promise.all([
@@ -71,10 +103,10 @@
     const plotW = cssW - pad.l - pad.r;
     const plotH = cssH - pad.t - pad.b;
 
-    // X range = now → +24h
+    // X range — driven by the operator-chosen horizon (today / +tomorrow
+    // / tomorrow only). "all" preserves the original now→+48h default.
     const now = Date.now();
-    const tMin = now - 30 * 60 * 1000; // 30 min look-back so in-progress slot is visible
-    const tMax = now + 48 * 60 * 60 * 1000;
+    const { tMin, tMax } = horizonBounds(state.horizon);
     const xScale = t => pad.l + (t - tMin) / (tMax - tMin) * plotW;
 
     // Layout: price bars (top) | mode band (thin strip) | power bars (middle) | SoC (bottom)
@@ -754,6 +786,36 @@
     window.addEventListener('resize', render);
     const btn = document.getElementById('plan-replan');
     if (btn) btn.addEventListener('click', replan);
+
+    // Horizon toggle wiring. Each click flips state.horizon, persists
+    // the choice, marks the right button active, and re-renders. The
+    // visual style (.toggle .active) is shared with the VAT pill.
+    const horizonRoot = document.getElementById('plan-horizon');
+    if (horizonRoot) {
+      // Reflect the persisted preference on first paint.
+      horizonRoot.setAttribute('data-horizon', state.horizon);
+      horizonRoot.querySelectorAll('button[data-horizon]').forEach(b => {
+        const isActive = b.dataset.horizon === state.horizon;
+        b.classList.toggle('active', isActive);
+        b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      });
+      horizonRoot.addEventListener('click', function (e) {
+        const target = e.target.closest('button[data-horizon]');
+        if (!target) return;
+        const next = target.dataset.horizon;
+        if (next !== 'today' && next !== 'all' && next !== 'tomorrow') return;
+        if (next === state.horizon) return;
+        state.horizon = next;
+        writeHorizonPref(next);
+        horizonRoot.setAttribute('data-horizon', next);
+        horizonRoot.querySelectorAll('button[data-horizon]').forEach(b => {
+          const isActive = b.dataset.horizon === next;
+          b.classList.toggle('active', isActive);
+          b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        });
+        render();
+      });
+    }
     const helpBtn = document.getElementById('plan-help-btn');
     const helpModal = document.getElementById('plan-help-modal');
     if (helpBtn && helpModal) {
