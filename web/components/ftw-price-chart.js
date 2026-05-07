@@ -54,7 +54,7 @@ class FtwPriceChart extends FtwElement {
       margin-top: 0.15rem;
       /* line-height 1 keeps each "now / low / high / avg" item tight
          vertically so when the row wraps onto two lines on a phone the
-         line-spacing comes from `row-gap`, not from per-item baseline
+         line-spacing comes from row-gap, not from per-item baseline
          leading (which otherwise stacked the wrapped row too far down). */
       line-height: 1;
     }
