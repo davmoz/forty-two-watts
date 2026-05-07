@@ -49,8 +49,14 @@ class FtwPriceChart extends FtwElement {
     .meta-stats {
       display: flex;
       gap: 0.9rem;
+      row-gap: 0.35rem;
       flex-wrap: wrap;
       margin-top: 0.15rem;
+      /* line-height 1 keeps each "now / low / high / avg" item tight
+         vertically so when the row wraps onto two lines on a phone the
+         line-spacing comes from `row-gap`, not from per-item baseline
+         leading (which otherwise stacked the wrapped row too far down). */
+      line-height: 1;
     }
     .meta-stats .meta-label {
       text-transform: uppercase;
@@ -400,9 +406,12 @@ class FtwPriceChart extends FtwElement {
     // labels rendered too close to the card's left border).
     // Phones get bigger fonts AND more padding so the larger labels
     // stay inside the SVG box and below the NOW pill clears its top.
+    // +4 px left padding so 3-digit öre prices (e.g. "234 ö") clear the
+    // SVG edge — the label is text-anchored "end" at `pad.l - 4` and
+    // extends left from there, so a tighter pad.l clipped large prices.
     const pad = small
-      ? { t: 26, r: 16, b: 40, l: 80 }
-      : { t: 16, r: 16, b: 28, l: 56 };
+      ? { t: 26, r: 16, b: 40, l: 84 }
+      : { t: 16, r: 16, b: 28, l: 60 };
     // Phone sizes bumped per operator request (2026-05): axis labels
     // were readable but the NOW marker felt thin and crowded against
     // the bars. +50 % on axes, +33 % on NOW + thicker stroke so the
