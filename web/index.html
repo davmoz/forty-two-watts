@@ -74,7 +74,10 @@
       <button data-view="diagnose" class="drawer-nav-btn" data-menu-label="Diagnose">&#9202;</button>
       <button id="hero-toggle" class="icon-btn" data-menu-label="Hero / tiles" title="Switch between hero diagram and numeric tiles">&#9638;</button>
       <button id="theme-toggle" class="icon-btn" data-menu-label="Dark mode" title="Toggle light / dark theme">&#9790;</button>
-      <button id="ui-mode-toggle" class="btn-link" title="Show advanced controls + diagnostics">Advanced</button>
+      <!-- Advanced toggle moved below the Plan chart so it's visually
+           colocated with the controls + diagnostics it reveals (twins,
+           drivers, models, manual mode buttons). The button still
+           lives in the DOM as #ui-mode-toggle, just rendered there. -->
       <ftw-notif-history poll-ms="30000" data-menu-label="Notification history"></ftw-notif-history>
       <button id="settings-btn" class="settings-btn" data-menu-label="Settings" title="Settings">⚙</button>
       <ftw-update-badge></ftw-update-badge>
@@ -363,6 +366,16 @@
           <span class="legend-item bat-only" title="State of charge — battery fill %, 0–100"><span class="legend-color" style="background:#60a5fa"></span> SoC</span>
         </div>
       </section>
+    </section>
+
+    <!-- Advanced-mode toggle row. Sits between the Plan chart and the
+         advanced-only sections so the affordance lands right where the
+         extra UI surfaces appear. Same id as the previously-header
+         button so the existing click handler in next-app.js still
+         binds; the previous .btn-link styling stays intact. -->
+    <section id="ui-mode-row" class="ui-mode-row">
+      <button id="ui-mode-toggle" class="btn-link"
+              title="Show advanced controls + diagnostics">Advanced</button>
     </section>
 
     <!-- ML twin diagnostics — PV / load / price forecasters -->

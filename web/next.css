@@ -774,6 +774,28 @@ body.ftw-next .card-hint {
   color: var(--fg-muted);
   margin-top: 8px;
 }
+/* Advanced-mode toggle row — sits between the live + plan charts and
+   the advanced-only sections, so the affordance lands right where
+   the extra UI surfaces appear when toggled on. Centered, quiet, and
+   only as wide as it needs to be. */
+body.ftw-next .ui-mode-row {
+  display: flex;
+  justify-content: center;
+  margin: 1.25rem 0 1.5rem;
+}
+
+/* Tile-mode cards that open a modal advertise their clickability —
+   pointer cursor + a subtle hover lift. Hero mode still uses the
+   energy-flow planets, so this only matters in tiles mode. */
+body.ftw-next .summary-card.clickable {
+  cursor: pointer;
+  transition: transform 80ms ease, border-color 120ms ease;
+}
+body.ftw-next .summary-card.clickable:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent-e);
+}
+
 body.ftw-next .card-hint.card-hint-active {
   /* Used when the hint is the *active* explanation of a disabled
      control (e.g. grid-target slider greyed out because the MPC

@@ -2085,6 +2085,39 @@
       });
     }
 
+    // Tile-mode (numeric cards) parity: when the operator toggles the
+    // hero off, the energy-flow planets aren't on screen, so the
+    // modal triggers need a second home. Binding click on the matching
+    // .summary-card opens the same modal, with a `.clickable` class
+    // that gives the card a pointer cursor + hover lift to advertise
+    // the affordance. EV has no tile-mode card today (loadpoints are
+    // listed separately) — leave that one to the planet for now.
+    var cardBat = document.getElementById("card-bat");
+    if (cardGrid && gridModal) {
+      cardGrid.classList.add("clickable");
+      cardGrid.setAttribute("role", "button");
+      cardGrid.setAttribute("tabindex", "0");
+      cardGrid.setAttribute("aria-label", "Open grid controls");
+      cardGrid.addEventListener("click", function () { gridModal.open(); });
+      cardGrid.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); gridModal.open(); }
+      });
+    }
+    if (cardBat) {
+      cardBat.classList.add("clickable");
+      cardBat.setAttribute("role", "button");
+      cardBat.setAttribute("tabindex", "0");
+      cardBat.setAttribute("aria-label", "Open battery controls");
+      var openBat = function () {
+        var bc = document.getElementById("battery-control");
+        if (bc && typeof bc.open === "function") bc.open();
+      };
+      cardBat.addEventListener("click", openBat);
+      cardBat.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openBat(); }
+      });
+    }
+
     function evCommand(action) {
       evActionBtns.forEach(function (b) { b.disabled = true; });
       var body = { action: action };
