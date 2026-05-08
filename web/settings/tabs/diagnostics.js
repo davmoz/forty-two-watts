@@ -90,6 +90,10 @@
         return "unknown";
       }
 
+      // Modal body is the scroll container; preserved across re-renders so
+      // the 5 s auto-refresh doesn't snap the operator back to the top.
+      var scrollHost = document.getElementById("settings-body") || document.scrollingElement;
+
       function renderList(health) {
         var names = Object.keys(health || {}).sort();
         if (!names.length) {
@@ -97,6 +101,7 @@
           return;
         }
         var now = Date.now();
+        var prevScroll = scrollHost ? scrollHost.scrollTop : 0;
         listEl.innerHTML = names.map(function (n) {
           var h = health[n] || {};
           var st = (h.Status === 0) ? "ok"
@@ -122,14 +127,22 @@
           row.addEventListener("click", function () {
             selected = row.dataset.name;
             listEl.querySelectorAll(".diag-row").forEach(function (r) { r.classList.toggle("active", r.dataset.name === selected); });
-            renderDetail(selected);
+            renderDetail(selected, true);
           });
         });
+        // Restore the modal body's scroll position so a background refresh
+        // doesn't yank the operator back to the top of the panel.
+        if (scrollHost) scrollHost.scrollTop = prevScroll;
       }
 
-      function renderDetail(name) {
+      function renderDetail(name, isUserAction) {
         if (!name) { detailEl.innerHTML = ""; return; }
-        detailEl.innerHTML = '<div class="diag-detail"><div class="diag-empty">Loading ' + escHtml(name) + '…</div></div>';
+        // Only flash "Loading…" when the operator clicked a row.
+        // Background refreshes silently swap content when the fetch
+        // resolves so the panel doesn't blink back to a placeholder.
+        if (isUserAction || !detailEl.firstElementChild) {
+          detailEl.innerHTML = '<div class="diag-detail"><div class="diag-empty">Loading ' + escHtml(name) + '…</div></div>';
+        }
         Promise.all([
           fetch("/api/drivers/" + encodeURIComponent(name)).then(function (r) { return r.json(); }),
           fetch("/api/drivers/" + encodeURIComponent(name) + "/logs?limit=200").then(function (r) { return r.json(); }).catch(function () { return { entries: [] }; }),
@@ -203,7 +216,26 @@
           html += '</div>';
 
           html += '</div>';
+          // Preserve scroll position of: (a) the modal body, so a 5 s
+          // refresh doesn't yank the page back to the top while the
+          // operator is reading metrics, and (b) the inner log tail,
+          // which has its own overflow:auto and would otherwise rewind
+          // to the top on every render.
+          var prevScroll = scrollHost ? scrollHost.scrollTop : 0;
+          var prevLogs = detailEl.querySelector(".diag-logs");
+          var prevLogsTop = prevLogs ? prevLogs.scrollTop : 0;
+          var prevLogsAtBottom = prevLogs
+            ? Math.abs((prevLogs.scrollTop + prevLogs.clientHeight) - prevLogs.scrollHeight) < 4
+            : true;
           detailEl.innerHTML = html;
+          if (scrollHost) scrollHost.scrollTop = prevScroll;
+          var newLogs = detailEl.querySelector(".diag-logs");
+          if (newLogs) {
+            // If the operator was already pinned to the bottom (reading
+            // the freshest log line) keep them pinned as new lines come
+            // in. Otherwise restore exactly where they were scrolled.
+            newLogs.scrollTop = prevLogsAtBottom ? newLogs.scrollHeight : prevLogsTop;
+          }
         }).catch(function (e) {
           detailEl.innerHTML = '<div class="diag-detail"><div class="diag-error">Failed to load: ' + escHtml(e.message) + '</div></div>';
         });
