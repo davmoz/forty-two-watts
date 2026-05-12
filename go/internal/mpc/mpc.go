@@ -498,6 +498,24 @@ func Optimize(slots []Slot, p Params) Plan {
 							continue
 						}
 
+						// Don't simultaneously discharge the home battery
+						// for grid export AND charge the EV. Either the
+						// battery is being sold for arbitrage profit (and
+						// EV charging would erode the export), or it's a
+						// roundtrip-laundering loop (battery → AC → EV at
+						// 2× round-trip loss vs. just charging the EV
+						// from grid in a different slot). Letting both
+						// happen at once is strictly worse than picking a
+						// slot that does one or the other. The deadline
+						// shortfall penalty handles "but the EV needs to
+						// charge eventually" — the DP will move EV
+						// charging to a slot where battery isn't
+						// exporting. 50 W epsilon mirrors the surplus-
+						// only constraints above.
+						if evActive && evW > 0 && battW < 0 && gridW < -50 {
+							continue
+						}
+
 						// Mode-based feasibility. Baseline includes
 						// EV so the mode check asks "is the extra
 						// battery action pulling the grid further

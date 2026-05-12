@@ -139,6 +139,46 @@ func TestArbitrageDischargesToExpensive(t *testing.T) {
 	}
 }
 
+// Regression: don't simultaneously discharge the home battery for grid
+// export AND charge the EV in the same slot. Either is fine alone but
+// together it's strictly worse than picking a slot for one or the
+// other — the EV either erodes the export profit or laundered grid
+// through the battery at 2× round-trip loss.
+func TestArbitrageNoEVChargeWhileBatteryExporting(t *testing.T) {
+	// Two slots: slot 0 cheap-with-PV (battery should charge from PV,
+	// EV could too), slot 1 expensive (battery should discharge to
+	// export). With the constraint, slot 1 must NOT also charge the EV.
+	slots := []Slot{
+		{StartMs: 0, LenMin: 60, PriceOre: 50, SpotOre: 50, LoadW: 500, PVW: -3000, Confidence: 1},
+		{StartMs: 3600_000, LenMin: 60, PriceOre: 800, SpotOre: 800, LoadW: 500, PVW: 0, Confidence: 1},
+	}
+	p := baseParams(ModeArbitrage)
+	p.InitialSoCPct = 80 // headroom for big discharge
+	p.ExportOrePerKWh = 700
+	p.Loadpoint = &LoadpointSpec{
+		ID:               "garage",
+		CapacityWh:       60000,
+		Levels:           11,
+		InitialSoCPct:    20,
+		PluggedIn:        true,
+		TargetSoCPct:     30,
+		TargetSlotIdx:    1, // deadline at slot 1 forces some EV charging
+		MaxChargeW:       11000,
+		AllowedStepsW:    []float64{0, 5000, 11000},
+		ChargeEfficiency: 0.9,
+	}
+	plan := Optimize(slots, p)
+
+	for i, a := range plan.Actions {
+		gridW := a.LoadW + a.PVW + a.BatteryW + a.LoadpointW
+		// gridW < -50 means real export this slot.
+		if a.LoadpointW > 0 && a.BatteryW < 0 && gridW < -50 {
+			t.Errorf("slot %d: EV charging at %fW while battery exports (battW=%f gridW=%f) — constraint violated",
+				i, a.LoadpointW, a.BatteryW, gridW)
+		}
+	}
+}
+
 // Regression: arbitrage at negative spot must NOT discharge battery to
 // grid. Real incident 2026-05-02: operator switched to planner_arbitrage
 // during −5 öre spot prices and watched batteries discharge full power
