@@ -506,6 +506,22 @@ func (s *Service) checkDivergence(ctx context.Context) {
 // Exposed for tests and API triggers.
 func (s *Service) Replan(ctx context.Context) *Plan { return s.replan(ctx) }
 
+// ReplanWithReason is Replan with an explicit reason string that lands
+// in slog + the diagnose snapshot. Use it when an external event (API
+// mutation, settings change, mode flip) forces a replan — the default
+// "scheduled" reason loses that provenance, which makes time-travel
+// debugging harder when the operator asks "why did the plan change at
+// 12:34?". Reasons should be short kebab-style, e.g.
+// "surplus_only_disabled", "target_soc_changed", "mode_changed".
+func (s *Service) ReplanWithReason(ctx context.Context, reason string) *Plan {
+	if reason != "" {
+		s.mu.Lock()
+		s.lastReason = reason
+		s.mu.Unlock()
+	}
+	return s.replan(ctx)
+}
+
 func (s *Service) replan(_ context.Context) *Plan {
 	now := time.Now()
 	untilMs := now.Add(s.Horizon).UnixMilli()
@@ -576,7 +592,9 @@ func (s *Service) replan(_ context.Context) *Plan {
 	// "idle, import to cover load" over "discharge now, refill from PV
 	// tomorrow" (because discharging loses η_rt while the extra retail-
 	// priced terminal credit is never realised).
+	terminalDefaulted := false
 	if p.TerminalSoCPrice <= 0 {
+		terminalDefaulted = true
 		switch p.Mode {
 		case ModeSelfConsumption, ModeCheapCharge:
 			p.TerminalSoCPrice = selfConsumptionTerminalPrice(prices,
@@ -606,6 +624,24 @@ func (s *Service) replan(_ context.Context) *Plan {
 			p.Loadpoint = spec
 			loadpointID = spec.ID
 		}
+	}
+
+	// Surplus-only LP override: when an EV is connected to a surplus-
+	// only loadpoint, the battery is forbidden from grid-charging
+	// (mpc.go feasibility). The default arbitrage terminal credit
+	// (mean retail import price across the horizon) then becomes
+	// misleading — it tells the DP "stored energy is worth full
+	// retail" while the only realistic discharge path is local
+	// self-consumption (battery → house, battery → EV via the still-
+	// allowed PV-only charge). Re-evaluate the terminal credit using
+	// the self-consumption formula so the planner stops chasing a
+	// reward it can no longer earn through grid arbitrage. Only
+	// applies when we just defaulted above; an explicit caller-
+	// supplied TerminalSoCPrice is respected.
+	if terminalDefaulted && p.Loadpoint != nil && p.Loadpoint.SurplusOnly &&
+		p.Mode != ModeSelfConsumption && p.Mode != ModeCheapCharge {
+		p.TerminalSoCPrice = selfConsumptionTerminalPrice(prices,
+			s.ExportBonusOreKwh, s.ExportFeeOreKwh)
 	}
 
 	slog.Info("mpc: optimize params",

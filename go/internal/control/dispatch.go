@@ -174,6 +174,20 @@ type State struct {
 	PeakImportCeilingW float64
 	// EV charging signal — batteries won't try to cover this much of import
 	EVChargingW float64
+
+	// EVSurplusOnlyReserveW is the aggregate PV headroom that must be
+	// kept available for EVs under surplus_only loadpoints. When > 0:
+	//   - the energy-allocation path caps battery aggregate charge so
+	//     it doesn't consume PV that the EV could be claiming
+	//   - the legacy PI / self-consumption path biases the grid setpoint
+	//     so it leaves `reserveRemaining` of export untouched
+	// Where reserveRemaining = max(0, EVSurplusOnlyReserveW - EVChargingW)
+	// — once the EV has ramped up to the reserve, no further headroom is
+	// withheld from the battery. Populated each tick by main.go from
+	// loadpoint.Manager.States(): sum of MaxChargeW across LPs that are
+	// SurplusOnly && PluggedIn. Set to 0 when no such LP is connected,
+	// in which case all behaviour reverts to the pre-existing path.
+	EVSurplusOnlyReserveW float64
 	// BatteryCoversEV overrides the default EV-exclusion behaviour. When
 	// false (default), EVChargingW is subtracted from the meter reading
 	// before the PI runs so batteries don't shuffle energy through the
@@ -613,7 +627,26 @@ func ComputeDispatch(
 	// clamps (SoC, per-driver MaxDischargeW, fuse guard) still apply —
 	// exceeding battery capacity just means the residual comes from grid.
 	gridW := rawGridW
-	if !state.BatteryCoversEV {
+	// Surplus-only EV transient cover: when an LP is in surplus_only mode
+	// AND the EV is currently drawing AND the site is importing, the EV
+	// is drawing more than the available surplus. This typically happens
+	// during the 5–15 s window after surplus_only is freshly enabled
+	// (the EV ramps current down through Easee Cloud + the car's onboard
+	// charger — both are slow), or during a sudden cloud transient. The
+	// home battery (Pixii) responds in <1 s, so let it cover the import
+	// burst until the EV ramp-down completes. Mechanism: don't subtract
+	// EV from gridW, so the PI sees the real import and discharges
+	// battery accordingly. Self-deactivates the moment grid goes
+	// negative again — at that point EV draw matches surplus and there's
+	// no import to cover, so steady-state surplus_only behavior is
+	// unchanged. The pre-existing reserve cap on the CHARGE side still
+	// stops the battery from competing with the EV for surplus when PV
+	// exceeds load+EV.
+	coverEV := state.BatteryCoversEV
+	if !coverEV && state.EVSurplusOnlyReserveW > 0 && state.EVChargingW > 0 && rawGridW > 0 {
+		coverEV = true
+	}
+	if !coverEV {
 		gridW -= state.EVChargingW
 	}
 
@@ -744,11 +777,41 @@ func ComputeDispatch(
 		// Charging is left untouched. Mirrors the dispatch.go:453 rule on
 		// the legacy path. The MPC also gets a NoBatteryToEV constraint
 		// so the plan stops prescribing what dispatch then has to censor.
-		if !state.BatteryCoversEV && state.EVChargingW > 0 && targetTotalW < 0 {
+		// EXCEPTION: surplus-only transient cover. Same gate as the
+		// rawGridW-subtraction path above — when a surplus_only LP is
+		// drawing more than current surplus (site importing), the battery
+		// is allowed to bridge the EV ramp-down for ~10 s while the
+		// Easee/car-side current ramp completes. The cap reverts the
+		// moment grid goes negative.
+		surplusTransient := state.EVSurplusOnlyReserveW > 0 && state.EVChargingW > 0 && rawGridW > 0
+		if !state.BatteryCoversEV && !surplusTransient && state.EVChargingW > 0 && targetTotalW < 0 {
 			houseGridW := rawGridW - state.EVChargingW
 			reactiveTotal := currentTotal - houseGridW
 			if targetTotalW < reactiveTotal {
 				targetTotalW = reactiveTotal
+			}
+		}
+
+		// Surplus-only EV reserve (energy path): cap battery aggregate
+		// charge to leave PV headroom for an EV that's under a
+		// surplus_only loadpoint. The MPC's grid-charge ban handles the
+		// planning side; this enforces it on every tick (covers reactive
+		// drift, stale plan fallback, and the period before the next
+		// replan picks up the EV's needs). Discharge is unaffected — the
+		// reserve only matters when the battery is competing with the
+		// EV for the same surplus PV.
+		if state.EVSurplusOnlyReserveW > 0 && targetTotalW > 0 {
+			pvSurplus := -gridW + currentTotal
+			reserveRemaining := state.EVSurplusOnlyReserveW - state.EVChargingW
+			if reserveRemaining < 0 {
+				reserveRemaining = 0
+			}
+			ceiling := pvSurplus - reserveRemaining
+			if ceiling < 0 {
+				ceiling = 0
+			}
+			if targetTotalW > ceiling {
+				targetTotalW = ceiling
 			}
 		}
 
@@ -759,6 +822,45 @@ func ComputeDispatch(
 		//   - planner_self (the "participate reactively" branch — idle-gate
 		//     already handled above)
 		//   - planner_cheap / planner_arbitrage when UseEnergyDispatch=false
+
+		// Surplus-only EV reserve (legacy/reactive path): when an EV
+		// under a surplus_only loadpoint is connected, bias the grid
+		// signal so the PI leaves `reserveRemaining` of export untouched
+		// for the EV. Without this, the PI drives gridW→0 by absorbing
+		// every kW of surplus into the battery and the EV controller
+		// (which polls a separate surplus number) sees nothing left to
+		// claim — flap mode. The bias is only applied to the self-
+		// consumption flavour: PeakShaving has its own peak-relative
+		// error, and other modes (Charge, Priority, Weighted) are out
+		// of scope for surplus-only semantics.
+		//
+		// Three regions:
+		//   gridW < -reserveRemaining: exporting MORE than the reserve.
+		//     Bias so PI absorbs only the excess (export beyond reserve).
+		//     biasedGridW = gridW + reserveRemaining (still negative).
+		//   -reserveRemaining <= gridW <= 0: exporting within the reserve.
+		//     Idle the battery — let the EV claim the export. biasedGridW=0.
+		//   gridW > 0: importing. Unchanged — battery still covers
+		//     household imports normally (the EV isn't drawing on
+		//     surplus_only, so there's no double-counting concern).
+		// A naive bias of `gridW + reserve` over the whole range would
+		// flip sign in the within-reserve band and tell the PI to
+		// DISCHARGE battery into the EV's reserved export space — the
+		// opposite of what we want.
+		biasedGridW := gridW
+		if state.EVSurplusOnlyReserveW > 0 && effectiveMode == ModeSelfConsumption {
+			reserveRemaining := state.EVSurplusOnlyReserveW - state.EVChargingW
+			if reserveRemaining < 0 {
+				reserveRemaining = 0
+			}
+			if gridW < -reserveRemaining {
+				biasedGridW = gridW + reserveRemaining
+			} else if gridW < 0 {
+				biasedGridW = 0
+			}
+			// gridW >= 0: leave biasedGridW = gridW (import behavior).
+		}
+
 		var errW float64
 		switch effectiveMode {
 		case ModePeakShaving:
@@ -772,12 +874,21 @@ func ComputeDispatch(
 				errW = 0
 			}
 		default:
-			errW = gridW - state.GridTargetW
+			errW = biasedGridW - state.GridTargetW
 		}
 
 		// Deadband only applies to the legacy path — the energy formula
 		// produces small corrections naturally when close to target.
-		if math.Abs(errW) < state.GridToleranceW {
+		// Surplus-only EV reserve override: when reserve is active, do
+		// NOT short-circuit on small error. The bias above can collapse
+		// the error to zero in the within-reserve band, but the battery
+		// might be running on a stale higher setpoint from before the
+		// reserve kicked in. Returning nil here would leave the battery
+		// stuck at that previous level, defeating the whole point of
+		// the reserve. Falling through forces a fresh dispatch that
+		// drives the battery toward 0 (or the post-PI cap below).
+		surplusActive := state.EVSurplusOnlyReserveW > 0 && effectiveMode == ModeSelfConsumption
+		if !surplusActive && math.Abs(errW) < state.GridToleranceW {
 			return nil
 		}
 
@@ -790,7 +901,7 @@ func ComputeDispatch(
 		if effectiveMode == ModePeakShaving {
 			piMeasurement = state.GridTargetW + errW
 		} else {
-			piMeasurement = gridW
+			piMeasurement = biasedGridW
 		}
 		out := state.PI.Update(piMeasurement)
 		totalCorrection = out.Output
@@ -808,12 +919,8 @@ func ComputeDispatch(
 		// signed distance from gridW to GridTargetW in the dispatch
 		// direction. Expressed via the existing errW (gridW - GridTargetW)
 		// so the clamp tracks whatever measurement the active mode feeds
-		// the PI (gridW for self_consumption, EV-aware; the same errW
-		// drives the PI's piMeasurement above).
-		//
-		// Deadband (state.GridToleranceW) is a threshold (do not fire
-		// below it), not a haircut (do not subtract from the headroom):
-		// the deadband already gates entry to this arm at line 780.
+		// the PI (#270 → #272). Deadband (state.GridToleranceW) is a
+		// threshold (do not fire below it), not a haircut.
 		targetTotal := currentTotal + totalCorrection
 		dead := state.GridToleranceW
 		var allowed float64
@@ -853,6 +960,35 @@ func ComputeDispatch(
 				"mode", string(effectiveMode))
 		}
 		totalCorrection = allowed - currentTotal
+
+		// Surplus-only EV reserve cap: stack on top of the meter clamp.
+		// Mirror the energy-path cap so the battery target on the
+		// legacy/reactive path also respects the EV reserve. The PI bias
+		// above tries to steer the integrator the right way, but PI
+		// windup, deadband interaction, and the slow integrator unwind
+		// would otherwise leave the battery on a stale charge command
+		// for tens of seconds — long enough to starve the EV. The meter
+		// clamp above caps "don't overshoot GridTargetW"; this cap is
+		// tighter when EV reserve is active: "don't charge past
+		// pvSurplus minus reserveRemaining" so the EV's promised PV
+		// slice stays unspent.
+		if surplusActive {
+			targetTotal2 := currentTotal + totalCorrection
+			if targetTotal2 > 0 {
+				pvSurplus := -gridW + currentTotal
+				reserveRemaining := state.EVSurplusOnlyReserveW - state.EVChargingW
+				if reserveRemaining < 0 {
+					reserveRemaining = 0
+				}
+				ceiling := pvSurplus - reserveRemaining
+				if ceiling < 0 {
+					ceiling = 0
+				}
+				if targetTotal2 > ceiling {
+					totalCorrection = ceiling - currentTotal
+				}
+			}
+		}
 	}
 
 	// ---- Joint fuse-budget allocator ----
