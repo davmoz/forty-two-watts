@@ -124,6 +124,15 @@ func (w *Watcher) reload() {
 	if newCfg.Site.MinDispatchIntervalS != oldCfg.Site.MinDispatchIntervalS {
 		w.ctrl.MinDispatchIntervalS = newCfg.Site.MinDispatchIntervalS
 	}
+	if newCfg.Site.PVSurplusAbsorbSoCCapPct != oldCfg.Site.PVSurplusAbsorbSoCCapPct {
+		slog.Info("config reload: pv_surplus_absorb_soc_cap_pct",
+			"old", oldCfg.Site.PVSurplusAbsorbSoCCapPct,
+			"new", newCfg.Site.PVSurplusAbsorbSoCCapPct)
+		w.ctrl.PVSurplusAbsorbSoCCapPct = newCfg.Site.PVSurplusAbsorbSoCCapPct
+	}
+	if newCfg.Site.PVSurplusAbsorbThresholdW != oldCfg.Site.PVSurplusAbsorbThresholdW {
+		w.ctrl.PVSurplusAbsorbThresholdW = newCfg.Site.PVSurplusAbsorbThresholdW
+	}
 	w.ctrlMu.Unlock()
 
 	// Swap global pointer
