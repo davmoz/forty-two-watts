@@ -1022,40 +1022,52 @@ func ComputeDispatch(
 		// plannerSelfIdleGate each have their own contracts that
 		// intentionally cross the GridTargetW line.
 		//
-		// "Don't overshoot": the resulting grid value should land near
-		// GridTargetW, not punch through it. Headroom is therefore the
-		// signed distance from gridW to GridTargetW in the dispatch
-		// direction. Expressed via the existing errW (gridW - GridTargetW)
-		// so the clamp tracks whatever measurement the active mode feeds
-		// the PI (#270 → #272). Deadband (state.GridToleranceW) is a
-		// threshold (do not fire below it), not a haircut.
+		// "Don't overshoot": with load and PV held constant within a tick,
+		// gridW moves 1:1 with bat (conservation: grid = load + bat + pv).
+		// So new bat = currentTotal - errW lands gridW exactly on
+		// GridTargetW. The clamp caps the PI's request at that ideal
+		// landing point — anything beyond would push gridW past the
+		// target (the original PR #270 incident: PI overshoots into
+		// export). The earlier formula `allowed = -errW` used errW as if
+		// it were an absolute discharge magnitude rather than a delta,
+		// which made the clamp pin the battery at exactly the level that
+		// produces the current import — a self-consistent stuck state
+		// whenever load exceeds the live grid error, the steady-state
+		// case in any house with continuous load above |errW|.
+		//
+		// Deadband (state.GridToleranceW) already gated entry to this
+		// arm at the abs(errW) < dead check above; no second deadband
+		// haircut here.
 		targetTotal := currentTotal + totalCorrection
-		dead := state.GridToleranceW
+		idealTarget := currentTotal - errW
 		var allowed float64
 		switch {
-		case targetTotal > 0: // plan says charge → cap so we don't push past GridTargetW
-			headroom := -errW // positive when grid is below target (room to charge up)
-			if headroom < dead {
-				headroom = 0
-			}
-			if targetTotal > headroom {
-				allowed = headroom
+		case targetTotal > 0 && errW < 0:
+			// PI wants to charge AND grid is below target (exporting):
+			// charging soaks the export. Cap so we don't overshoot into
+			// import.
+			if targetTotal > idealTarget {
+				allowed = idealTarget
 			} else {
 				allowed = targetTotal
 			}
-		case targetTotal < 0: // plan says discharge → cap so we don't push past GridTargetW
-			headroom := errW // positive when grid is above target (room to discharge down)
-			if headroom < dead {
-				headroom = 0
-			}
-			if -targetTotal > headroom {
-				allowed = -headroom
+		case targetTotal < 0 && errW > 0:
+			// PI wants to discharge AND grid is above target (importing):
+			// discharging covers the import. Cap so we don't overshoot
+			// into export.
+			if targetTotal < idealTarget {
+				allowed = idealTarget
 			} else {
 				allowed = targetTotal
 			}
 		default:
+			// PI wants to move the wrong direction relative to errW
+			// (e.g. charge while importing — usually integrator windup
+			// from a prior mode). Force battery to 0 and let the slew
+			// clamp decay it there gracefully.
 			allowed = 0
 		}
+		dead := state.GridToleranceW
 		if allowed != targetTotal {
 			slog.Warn("dispatch: meter clamp reduced battery target",
 				"requested_total_w", targetTotal,

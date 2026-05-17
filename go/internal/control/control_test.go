@@ -2263,21 +2263,30 @@ func TestBatteryManualHoldBypassesHoldoff(t *testing.T) {
 // magnitude in the matching direction.
 
 func TestMeterClampStopsExportOnLoadOverPrediction(t *testing.T) {
-	// Live meter: importing +2000 W (small house load).
-	// Battery: currently discharging at -5000 W (forecast said load was
-	// much higher than reality). Reactive PI in ModeSelfConsumption will
-	// want to continue discharging hard to drive gridW → 0, but doing so
-	// would flip the meter into export. The clamp must cap the total
-	// battery target at -|rawGridW| = -2000.
+	// Original incident geometry (PR #270): the reactive PI commands a
+	// discharge that, if executed in this tick, would push the grid past
+	// GridTargetW into export. The clamp must cap at the ideal landing
+	// point, not let the PI overshoot.
+	//
+	// Setup: bat idle at 0, gridW = +2000 (importing 2 kW), target = 0.
+	// Conservation says newBat = -2000 lands gridW on 0 exactly. PI is
+	// pre-wound (simulated integrator windup) so its one-tick output
+	// alone wants more discharge than that — should be clamped to -2000.
 	store := seedStore(2000, []struct {
 		name          string
 		currentW, soc float64
 	}{
-		{"ferroamp", -5000, 0.6},
+		{"ferroamp", 0, 0.6},
 	})
 	st := NewState(0, 50, "ferroamp")
 	st.Mode = ModeSelfConsumption
 	st.SlewRateW = 100000 // big so slew doesn't mask the clamp
+	// Force windup that would otherwise push past idealTarget=-2000.
+	// Repeated PI.Update at gridW=2000 accumulates integral until output
+	// saturates well below idealTarget.
+	for i := 0; i < 200; i++ {
+		st.PI.Update(2000)
+	}
 	targets := ComputeDispatch(store, st, caps(map[string]float64{"ferroamp": 15200}), 11040)
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(targets))
@@ -2286,47 +2295,85 @@ func TestMeterClampStopsExportOnLoadOverPrediction(t *testing.T) {
 	for _, tg := range targets {
 		sum += tg.TargetW
 	}
-	// Magnitude of discharge must not exceed live import (2000 W).
-	if sum < -2000-1e-6 {
-		t.Errorf("meter clamp should cap discharge at -|rawGridW|=-2000, got sum=%f", sum)
+	// idealTarget = currentTotal - errW = 0 - 2000 = -2000. Clamp must
+	// not let bat go past that (i.e., more negative). Slack of 1 W
+	// for PI integrator settle on this tick.
+	if sum < -2000-1.0 {
+		t.Errorf("clamp should cap discharge at idealTarget=-2000, got sum=%f", sum)
 	}
-	// Direction sanity: should still be discharging (or zero), never
-	// charging when importing.
-	if sum > 0 {
-		t.Errorf("import case should not produce a charge command, got sum=%f", sum)
+	// And it must actually be discharging (clamp is one-sided, not zero).
+	if sum > -1.0 {
+		t.Errorf("clamp swallowed all PI output instead of letting it close the gap, got sum=%f", sum)
 	}
 }
 
 func TestMeterClampStopsImportOnLoadUnderPrediction(t *testing.T) {
-	// Mirror of the over-prediction case. Live meter: exporting -2000 W
-	// (PV momentarily under-loaded relative to forecast). Battery is
-	// already charging at +5000 W. GridTargetW = 0. The reactive PI sees
-	// errW = -2000 and keeps demanding more charge to drive gridW → 0,
-	// but doing so would flip the meter into import. The clamp must cap
-	// the total battery target at +|errW| = +2000 so the site does not
-	// pull additional power from the grid to feed the battery.
+	// Mirror of the over-prediction case. Bat idle at 0, gridW = -2000
+	// (exporting 2 kW), target = 0. Wound-up PI wants to charge more
+	// than needed; clamp must cap at idealTarget = +2000.
 	store := seedStore(-2000, []struct {
 		name          string
 		currentW, soc float64
 	}{
-		{"ferroamp", 5000, 0.5},
+		{"ferroamp", 0, 0.5},
 	})
 	st := NewState(0, 50, "ferroamp")
 	st.Mode = ModeSelfConsumption
 	st.SlewRateW = 100000
+	for i := 0; i < 200; i++ {
+		st.PI.Update(-2000)
+	}
 	targets := ComputeDispatch(store, st, caps(map[string]float64{"ferroamp": 15200}), 11040)
 	var sum float64
 	for _, tg := range targets {
 		sum += tg.TargetW
 	}
-	// Magnitude of charge must not exceed live export (2000 W).
-	if sum > 2000+1e-6 {
-		t.Errorf("meter clamp should cap charge at +|errW|=+2000, got sum=%f", sum)
+	// idealTarget = 0 - (-2000) = +2000. Clamp keeps charge ≤ that.
+	if sum > 2000+1.0 {
+		t.Errorf("clamp should cap charge at idealTarget=+2000, got sum=%f", sum)
 	}
-	// Direction sanity: should still be charging (or zero), never
-	// discharging when exporting.
-	if sum < 0 {
-		t.Errorf("export case should not produce a discharge command, got sum=%f", sum)
+	if sum < 1.0 {
+		t.Errorf("clamp swallowed all PI output instead of letting it close the gap, got sum=%f", sum)
+	}
+}
+
+func TestMeterClampConvergesWithBatteryAlreadyDischarging(t *testing.T) {
+	// Regression for the .139 production stuck-state: in manual
+	// self_consumption with grid_target=0, the battery would sit forever
+	// at e.g. -422 W producing grid_w +422 W (because load=836 W meant
+	// the bat alone couldn't cover all consumption). The old clamp pinned
+	// |target| ≤ |errW|, which equalled |currentTotal| in steady state,
+	// so no progress was ever made.
+	//
+	// Conservation: gridW_next = gridW_now + (bat_next - bat_now). For
+	// gridW → 0, need bat_next = bat_now - errW. Clamp's idealTarget
+	// gives exactly that bound — the PI must be free to drive past
+	// |currentTotal| toward that ideal.
+	//
+	// Geometry: bat already at -422 W, gridW = +422 W, target = 0.
+	// idealTarget = -422 - 422 = -844 W. PI should push toward there.
+	store := seedStore(422, []struct {
+		name          string
+		currentW, soc float64
+	}{
+		{"ferroamp", -422, 0.8},
+	})
+	st := NewState(0, 50, "ferroamp")
+	st.Mode = ModeSelfConsumption
+	st.SlewRateW = 100000 // big so the convergence isn't slew-limited
+	targets := ComputeDispatch(store, st, caps(map[string]float64{"ferroamp": 15200}), 11040)
+	var sum float64
+	for _, tg := range targets {
+		sum += tg.TargetW
+	}
+	// Must move further into discharge than currentTotal — the bug was
+	// that the old clamp pinned sum at currentTotal forever.
+	if sum >= -422.0 {
+		t.Errorf("clamp pinned dispatch at currentTotal=-422 (stuck state); expected more discharge, got sum=%f", sum)
+	}
+	// And it must not overshoot past idealTarget = -844.
+	if sum < -844.0-1.0 {
+		t.Errorf("clamp let discharge overshoot idealTarget=-844, got sum=%f", sum)
 	}
 }
 
