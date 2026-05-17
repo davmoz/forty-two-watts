@@ -178,6 +178,14 @@ type Manager struct {
 	// schedule is set or cleared. Wired by main.go to persist via
 	// state.SaveConfig. Left nil in tests / sites without storage.
 	scheduleSaver func(id string, s Schedule)
+
+	// surplusOnlySaver, if non-nil, persists the runtime surplus_only
+	// flag whenever an operator toggles it. Without this the flag
+	// reverts to whatever's in YAML on every restart — operators were
+	// finding that frustrating since the toggle lives in the dashboard
+	// EV modal, not the YAML they'd think to edit. Same pattern as
+	// scheduleSaver.
+	surplusOnlySaver func(id string, v bool)
 }
 
 // loadpointRuntime is the in-memory representation. Its fields are the
@@ -396,14 +404,44 @@ func (m *Manager) SetTarget(id string, socPct float64, targetTime time.Time) boo
 // handler forces a tagged replan in that case.
 func (m *Manager) SetSurplusOnly(id string, v bool) (prev bool, ok bool) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	lp, ok := m.byID[id]
 	if !ok {
+		m.mu.Unlock()
 		return false, false
 	}
 	prev = lp.Config.SurplusOnly
 	lp.Config.SurplusOnly = v
+	saver := m.surplusOnlySaver
+	m.mu.Unlock()
+	if saver != nil && prev != v {
+		saver(id, v)
+	}
 	return prev, true
+}
+
+// SetSurplusOnlySaver wires the persistence callback. Pass nil to
+// disable. Mirrors SetScheduleSaver — the saver runs on every change
+// (after the mutex is released, so the storage I/O isn't on the hot
+// path).
+func (m *Manager) SetSurplusOnlySaver(saver func(id string, v bool)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.surplusOnlySaver = saver
+}
+
+// HydrateSurplusOnly seeds the in-memory surplus_only flag from a
+// per-LP loader at boot. Called once after Load; loader returns
+// (value, true) when a persisted override exists and should win over
+// the YAML default, (zero, false) otherwise. Matches the pattern used
+// by HydrateSchedules.
+func (m *Manager) HydrateSurplusOnly(load func(id string) (bool, bool)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, lp := range m.byID {
+		if v, ok := load(id); ok {
+			lp.Config.SurplusOnly = v
+		}
+	}
 }
 
 // SetCurrentSoC lets an operator correct the inferred vehicle SoC

@@ -348,6 +348,29 @@ func main() {
 		}
 		return s, !s.Empty()
 	})
+	// Persist surplus_only toggles the same way schedules persist —
+	// state.config key `loadpoint_surplus_only:<id>` stores "true" or
+	// "false". Operators toggle this from the dashboard EV modal, not
+	// YAML, so the previous in-memory-only behaviour reverted the
+	// flag on every restart.
+	const lpSurplusKeyPrefix = "loadpoint_surplus_only:"
+	lpMgr.SetSurplusOnlySaver(func(id string, v bool) {
+		key := lpSurplusKeyPrefix + id
+		val := "false"
+		if v {
+			val = "true"
+		}
+		if err := st.SaveConfig(key, val); err != nil {
+			slog.Warn("failed to persist loadpoint surplus_only", "lp", id, "err", err)
+		}
+	})
+	lpMgr.HydrateSurplusOnly(func(id string) (bool, bool) {
+		v, ok := st.LoadConfig(lpSurplusKeyPrefix + id)
+		if !ok || v == "" {
+			return false, false
+		}
+		return v == "true", true
+	})
 	// Seed any recurring deadlines from boot — without this the first
 	// dispatch tick would race with an empty target_time and might
 	// miss the deadline penalty for ~5 s.
