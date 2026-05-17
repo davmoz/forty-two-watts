@@ -2045,7 +2045,15 @@
       var d = results[0];
       var lps = results[1];
       var status = lastStatusPayload;
-      if (!d || d.connected === false) {
+      var hasLoadpoints = lps && Array.isArray(lps.loadpoints) && lps.loadpoints.length > 0;
+      var carConnected = d && d.connected !== false;
+      // Hard short-circuit only when there's NOTHING to show: no
+      // active EV AND no configured loadpoint. Otherwise we fall
+      // through so the schedule editor stays reachable — operators
+      // routinely want to set tomorrow morning's target before
+      // plugging in tonight, and the schedule is LP state (persisted
+      // across restarts), not driver state.
+      if (!carConnected && !hasLoadpoints) {
         setEvModalMessage("No EV charger connected");
         statusTableEl = null;
         schedSectionEl = null;
@@ -2056,7 +2064,19 @@
       // (including any mounted schedule section) is untouched. On the
       // very first call evModalBody may still contain the placeholder
       // from setEvModalMessage; wipe only when we have no anchor yet.
-      var freshStatus = renderEvStatusTable(d);
+      // When no car is connected but loadpoints exist, render a
+      // dim placeholder note in place of the live status table so
+      // the modal still has a header before the schedule editor.
+      var freshStatus;
+      if (carConnected) {
+        freshStatus = renderEvStatusTable(d);
+      } else {
+        freshStatus = document.createElement("p");
+        freshStatus.style.color = "var(--text-dim)";
+        freshStatus.style.fontStyle = "italic";
+        freshStatus.style.margin = "0 0 0.6rem 0";
+        freshStatus.textContent = "No car connected — schedule below is saved to the loadpoint and applies on next plug-in.";
+      }
       if (statusTableEl && statusTableEl.parentNode === evModalBody) {
         evModalBody.replaceChild(freshStatus, statusTableEl);
       } else {
