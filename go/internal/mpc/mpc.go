@@ -516,6 +516,32 @@ func Optimize(slots []Slot, p Params) Plan {
 							continue
 						}
 
+						// NoBatteryToEV: operator has BatteryCoversEV=false
+						// (the default), meaning the home battery's energy
+						// is allowed to cover house load but never the EV.
+						// Reject any allocation where the battery's
+						// discharge exceeds the PV-residual house demand
+						// — i.e. where, by conservation, some of the
+						// battery's energy must have flowed into the EV.
+						// houseResidualW = max(0, load - pv_gen) is how
+						// much house demand is left after PV has covered
+						// what it can; the battery can supply up to that
+						// much and still be claimed as "house only".
+						// Anything beyond it must go to EV (illegal here)
+						// or grid (covered by the rule above).
+						// Matches the runtime safety clamp at
+						// dispatch.go:787 — keep them aligned. 50 W
+						// epsilon mirrors the surrounding constraints.
+						if evActive && lp.NoBatteryToEV && evW > 0 && battW < 0 {
+							houseResidualW := slot.LoadW + slot.PVW // PVW is negative
+							if houseResidualW < 0 {
+								houseResidualW = 0
+							}
+							if (-battW) > houseResidualW+50 {
+								continue
+							}
+						}
+
 						// Mode-based feasibility. Baseline includes
 						// EV so the mode check asks "is the extra
 						// battery action pulling the grid further

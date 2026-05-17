@@ -837,6 +837,17 @@ func main() {
 				if lpController != nil {
 					batSoCArmed = lpController.IsBatSoCArmed(st.ID)
 				}
+				// NoBatteryToEV mirrors the site-wide ctrl.BatteryCoversEV
+				// flag (inverted). Plumbing the constraint into the DP
+				// here means the planner stops scheduling battery→EV
+				// transfers that dispatch's safety net would just clamp
+				// at runtime; this closes the plan↔reality divergence
+				// where operators saw "plan: 7 kW discharge + 11 kW EV"
+				// while live execution held the battery at house-only
+				// levels. Take ctrlMu for the bool read.
+				ctrlMu.Lock()
+				noBatteryToEV := !ctrl.BatteryCoversEV
+				ctrlMu.Unlock()
 				return &mpc.LoadpointSpec{
 					ID:               st.ID,
 					CapacityWh:       capWh,
@@ -851,6 +862,7 @@ func main() {
 					AllowedStepsW:    st.AllowedStepsW,
 					ChargeEfficiency: 0.9,
 					SurplusOnly:      st.SurplusOnly || deferGridPlan || batSoCArmed,
+					NoBatteryToEV:    noBatteryToEV,
 				}
 			}
 			return nil
