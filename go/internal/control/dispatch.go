@@ -1022,49 +1022,77 @@ func ComputeDispatch(
 		// plannerSelfIdleGate each have their own contracts that
 		// intentionally cross the GridTargetW line.
 		//
-		// "Don't overshoot": the resulting grid value should land near
-		// GridTargetW, not punch through it. Headroom is therefore the
-		// signed distance from gridW to GridTargetW in the dispatch
-		// direction. Expressed via the existing errW (gridW - GridTargetW)
-		// so the clamp tracks whatever measurement the active mode feeds
-		// the PI (#270 → #272). Deadband (state.GridToleranceW) is a
-		// threshold (do not fire below it), not a haircut.
+		// Derivation. With load and PV held constant within a tick,
+		// gridW moves 1:1 with bat (conservation: grid = load + bat + pv).
+		// So the new battery target lands gridW at GridTargetW when
+		//
+		//   idealTarget := currentTotal − errW
+		//
+		// The PI's request `targetTotal = currentTotal + totalCorrection`
+		// can fall into three regions:
+		//   - between currentTotal and idealTarget   → on the recovery
+		//                                                path, pass through
+		//   - past idealTarget (overshoot direction) → cap to idealTarget
+		//   - past currentTotal in the OPPOSITE direction (wrong-way move,
+		//     typically PI integrator windup from a prior mode)
+		//                                              → hold at currentTotal
+		//                                                until integrator
+		//                                                unwinds
+		//
+		// History. The earlier formula `allowed = ±errW` (i.e. -errW for
+		// the discharge arm, headroom-style for the charge arm) ignored
+		// currentTotal entirely, which (a) pinned bat at exactly the
+		// level reproducing the current grid error — a self-consistent
+		// stuck state whenever load exceeded |errW|, the steady-state
+		// case for any house with continuous load above the gap; and (b)
+		// in its switch on `targetTotal > 0 / < 0` accidentally folded
+		// the "PI overshooting during a natural recovery" case in with
+		// the "wrong-direction windup" case, hard-cutting bat to 0 mid-
+		// recovery and introducing visible flapping (commit 80456a1
+		// dropped that branch but left the wrong-direction case
+		// unprotected — Copilot caught the regression on PR #276).
+		//
+		// Deadband (state.GridToleranceW) already gated entry to this
+		// arm at the abs(errW) < dead check above; no second deadband
+		// haircut here.
 		targetTotal := currentTotal + totalCorrection
-		dead := state.GridToleranceW
+		idealTarget := currentTotal - errW
+		// correctionDir = sign(targetTotal − currentTotal); needs to
+		// match sign(idealTarget − currentTotal) = sign(−errW). When
+		// they disagree, PI is moving the wrong way (windup). Use a
+		// small epsilon so PI noise near zero doesn't classify as
+		// "wrong direction".
+		const wrongDirEpsW = 1.0
+		correctionDir := targetTotal - currentTotal
 		var allowed float64
 		switch {
-		case targetTotal > 0: // plan says charge → cap so we don't push past GridTargetW
-			headroom := -errW // positive when grid is below target (room to charge up)
-			if headroom < dead {
-				headroom = 0
-			}
-			if targetTotal > headroom {
-				allowed = headroom
-			} else {
-				allowed = targetTotal
-			}
-		case targetTotal < 0: // plan says discharge → cap so we don't push past GridTargetW
-			headroom := errW // positive when grid is above target (room to discharge down)
-			if headroom < dead {
-				headroom = 0
-			}
-			if -targetTotal > headroom {
-				allowed = -headroom
-			} else {
-				allowed = targetTotal
-			}
+		case errW > 0 && correctionDir > wrongDirEpsW:
+			// Importing but PI wants to charge — wrong-direction windup.
+			allowed = currentTotal
+		case errW < 0 && correctionDir < -wrongDirEpsW:
+			// Exporting but PI wants to discharge — wrong-direction windup.
+			allowed = currentTotal
+		case errW > 0 && targetTotal < idealTarget:
+			// Importing: discharge needed. PI wants more than will land
+			// us on target — cap so we don't punch through into export.
+			allowed = idealTarget
+		case errW < 0 && targetTotal > idealTarget:
+			// Exporting: charge needed. PI wants more than will land us
+			// on target — cap so we don't punch through into import.
+			allowed = idealTarget
 		default:
-			allowed = 0
+			allowed = targetTotal
 		}
 		if allowed != targetTotal {
 			slog.Warn("dispatch: meter clamp reduced battery target",
 				"requested_total_w", targetTotal,
 				"clamped_total_w", allowed,
+				"ideal_target_w", idealTarget,
 				"grid_w", gridW,
 				"grid_target_w", state.GridTargetW,
 				"err_w", errW,
 				"current_total_w", currentTotal,
-				"deadband_w", dead,
+				"deadband_w", state.GridToleranceW,
 				"mode", string(effectiveMode))
 		}
 		totalCorrection = allowed - currentTotal
