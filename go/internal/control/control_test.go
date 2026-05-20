@@ -1053,9 +1053,6 @@ func TestEnergyDispatchHoldsPlanUnderArbitrage(t *testing.T) {
 	}
 }
 
-// ptr is a tiny helper for tests that need a *float64 on SlotDirective.
-func ptr[T any](v T) *T { return &v }
-
 // ---- planner_arbitrage PlannedGridW soft reactive cap ----
 //
 // Community report (2026-05-19, planner_arbitrage): "When the sun goes
@@ -1086,7 +1083,7 @@ func TestEnergyDispatchPlannedGridCapBacksOffChargeWhenPVDrops(t *testing.T) {
 		SlotEnd:         now.Add(15 * time.Minute),
 		BatteryEnergyWh: 1200, // ~4800 W average
 		Strategy:        "arbitrage",
-		PlannedGridW:    ptr(0.0), // plan expected near-zero grid (PV did the work)
+		PlannedGridW:    ptrF64(0), // plan expected near-zero grid (PV did the work)
 	}
 	// Live: gridW = +3000 (importing 3 kW because PV dropped to 1800 W
 	// vs 5 kW planned, no other load drift). Battery at 0.
@@ -1126,7 +1123,7 @@ func TestEnergyDispatchPlannedGridCapAllowsPlannedImport(t *testing.T) {
 		SlotEnd:         now.Add(15 * time.Minute),
 		BatteryEnergyWh: 500, // 2000 W average over 15 min
 		Strategy:        "cheap_charge",
-		PlannedGridW:    ptr(2000.0), // plan: import 2 kW to charge
+		PlannedGridW:    ptrF64(2000), // plan: import 2 kW to charge
 	}
 	store := seedStore(2000, []struct {
 		name          string
@@ -1157,7 +1154,7 @@ func TestEnergyDispatchPlannedGridCapNoFireInsideDeadband(t *testing.T) {
 		SlotEnd:         now.Add(15 * time.Minute),
 		BatteryEnergyWh: 1200, // 4800 W average
 		Strategy:        "arbitrage",
-		PlannedGridW:    ptr(0.0),
+		PlannedGridW:    ptrF64(0),
 	}
 	// Live grid +50 W — inside the 100 W deadband.
 	store := seedStore(50, []struct {
@@ -1234,7 +1231,7 @@ func TestEnergyDispatchPlannedGridCapDoesNotFireOnDischarge(t *testing.T) {
 		SlotEnd:         now.Add(15 * time.Minute),
 		BatteryEnergyWh: -1000, // -4000 W average discharge
 		Strategy:        "arbitrage",
-		PlannedGridW:    ptr(-200.0),
+		PlannedGridW:    ptrF64(-200),
 	}
 	store := seedStore(-3000, []struct {
 		name          string

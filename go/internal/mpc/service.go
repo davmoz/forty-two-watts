@@ -212,10 +212,12 @@ type SlotDirective struct {
 
 	// GridW is the plan's forecast of slot-average grid power given the
 	// planned battery / load / PV mix (site-signed: + = import). The
-	// dispatch layer treats it as a soft reactive cap on the energy
-	// path — battery isn't allowed to push live gridW past plan in the
-	// dispatch direction. See control.SlotDirective.PlannedGridW for
-	// the full rationale.
+	// dispatch layer treats it as a CHARGE-ONLY soft reactive cap on
+	// the energy path — on a charging slot, the battery target is
+	// pulled back when live gridW imports more than plan. Discharge
+	// slots are intentionally not clamped (extra export = bonus revenue
+	// at the slot's chosen price). See control.SlotDirective.PlannedGridW
+	// and docs/safety.md §8 for the asymmetry rationale.
 	GridW float64
 
 	// LoadpointEnergyWh carries per-loadpoint EV energy budgets for

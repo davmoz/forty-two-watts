@@ -65,13 +65,20 @@ type SlotDirective struct {
 
 	// PlannedGridW is the plan's forecast of slot-average gridW given the
 	// planned battery / load / PV mix (site-signed: + = import). The
-	// energy-dispatch path uses it as a soft reactive cap: don't push
-	// live gridW past plan in the dispatch direction. When live PV / load
-	// drifts away from the plan's forecast — e.g. a cloud cuts PV mid-
-	// slot during a planner_arbitrage charge slot that expected to charge
-	// off solar — the cap pulls the battery toward "what would make
+	// energy-dispatch path uses it as a CHARGE-ONLY soft reactive cap:
+	// on a charge slot (targetTotalW > 0), don't push live gridW past
+	// plan in the import direction. When live PV / load drifts away
+	// from the plan's forecast — e.g. a cloud cuts PV mid-slot during
+	// a planner_arbitrage charge slot that expected to charge off
+	// solar — the cap pulls the battery target toward "what would make
 	// live gridW match plan", preventing the energy budget from blindly
-	// driving extra grid import (or, on a discharge slot, extra export).
+	// driving extra grid import.
+	//
+	// Discharge slots are intentionally NOT clamped: extra export during
+	// a discharge slot is bonus revenue (the Wh budget is still delivered
+	// — the extra comes from load undershooting forecast), and backing
+	// off would undermine a DP choice the planner already evaluated. See
+	// docs/safety.md §8 for the full rationale.
 	//
 	// Pointer so the zero-value SlotDirective used by existing tests
 	// (and any caller that doesn't know the plan's grid forecast) opts
