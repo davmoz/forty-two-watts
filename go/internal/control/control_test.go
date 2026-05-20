@@ -1083,7 +1083,8 @@ func TestEnergyDispatchPlannedGridCapBacksOffChargeWhenPVDrops(t *testing.T) {
 		SlotEnd:         now.Add(15 * time.Minute),
 		BatteryEnergyWh: 1200, // ~4800 W average
 		Strategy:        "arbitrage",
-		PlannedGridW:    ptrF64(0), // plan expected near-zero grid (PV did the work)
+		PlannedGridW:    0, // plan expected near-zero grid (PV did the work)
+		HasPlannedGridW: true,
 	}
 	// Live: gridW = +3000 (importing 3 kW because PV dropped to 1800 W
 	// vs 5 kW planned, no other load drift). Battery at 0.
@@ -1123,7 +1124,8 @@ func TestEnergyDispatchPlannedGridCapAllowsPlannedImport(t *testing.T) {
 		SlotEnd:         now.Add(15 * time.Minute),
 		BatteryEnergyWh: 500, // 2000 W average over 15 min
 		Strategy:        "cheap_charge",
-		PlannedGridW:    ptrF64(2000), // plan: import 2 kW to charge
+		PlannedGridW:    2000, // plan: import 2 kW to charge
+		HasPlannedGridW: true,
 	}
 	store := seedStore(2000, []struct {
 		name          string
@@ -1154,7 +1156,8 @@ func TestEnergyDispatchPlannedGridCapNoFireInsideDeadband(t *testing.T) {
 		SlotEnd:         now.Add(15 * time.Minute),
 		BatteryEnergyWh: 1200, // 4800 W average
 		Strategy:        "arbitrage",
-		PlannedGridW:    ptrF64(0),
+		PlannedGridW:    0,
+		HasPlannedGridW: true,
 	}
 	// Live grid +50 W — inside the 100 W deadband.
 	store := seedStore(50, []struct {
@@ -1176,19 +1179,20 @@ func TestEnergyDispatchPlannedGridCapNoFireInsideDeadband(t *testing.T) {
 	}
 }
 
-// TestEnergyDispatchNilPlannedGridWBypassesCap — legacy callers /
-// tests construct SlotDirective without setting PlannedGridW. The
-// nil pointer is the opt-out signal; behaviour must be unchanged from
-// before the cap landed (battery chases the plan, just like the
-// pre-fix behaviour the community report identified).
-func TestEnergyDispatchNilPlannedGridWBypassesCap(t *testing.T) {
+// TestEnergyDispatchUnsetPlannedGridWBypassesCap — legacy callers /
+// tests construct SlotDirective without setting PlannedGridW (and
+// without flipping HasPlannedGridW). HasPlannedGridW=false is the
+// opt-out signal; behaviour must be unchanged from before the cap
+// landed (battery chases the plan, just like the pre-fix behaviour
+// the community report identified).
+func TestEnergyDispatchUnsetPlannedGridWBypassesCap(t *testing.T) {
 	now := time.Now()
 	dir := SlotDirective{
 		SlotStart:       now,
 		SlotEnd:         now.Add(15 * time.Minute),
 		BatteryEnergyWh: 1200, // 4800 W average
 		Strategy:        "arbitrage",
-		// PlannedGridW intentionally nil
+		// PlannedGridW + HasPlannedGridW intentionally zero-valued
 	}
 	store := seedStore(3000, []struct {
 		name          string
@@ -1205,7 +1209,7 @@ func TestEnergyDispatchNilPlannedGridWBypassesCap(t *testing.T) {
 	got := targets[0].TargetW
 	// No cap → battery follows plan ~4800 W (pre-fix behaviour).
 	if got < 4700 || got > 4900 {
-		t.Errorf("TargetW = %f W — with PlannedGridW=nil the cap must not fire; "+
+		t.Errorf("TargetW = %f W — with HasPlannedGridW=false the cap must not fire; "+
 			"behaviour should be identical to pre-fix arbitrage (~4800 W)", got)
 	}
 }
@@ -1231,7 +1235,8 @@ func TestEnergyDispatchPlannedGridCapDoesNotFireOnDischarge(t *testing.T) {
 		SlotEnd:         now.Add(15 * time.Minute),
 		BatteryEnergyWh: -1000, // -4000 W average discharge
 		Strategy:        "arbitrage",
-		PlannedGridW:    ptrF64(-200),
+		PlannedGridW:    -200,
+		HasPlannedGridW: true,
 	}
 	store := seedStore(-3000, []struct {
 		name          string

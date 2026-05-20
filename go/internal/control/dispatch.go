@@ -80,11 +80,13 @@ type SlotDirective struct {
 	// off would undermine a DP choice the planner already evaluated. See
 	// docs/safety.md §8 for the full rationale.
 	//
-	// Pointer so the zero-value SlotDirective used by existing tests
-	// (and any caller that doesn't know the plan's grid forecast) opts
-	// out of the cap by default. main.go populates it when running
-	// against a real MPC plan.
-	PlannedGridW *float64
+	// HasPlannedGridW gates whether the cap should consult PlannedGridW
+	// at all. Stored as a separate bool (rather than a *float64) so the
+	// per-tick directive bridge in main.go doesn't escape-allocate. The
+	// zero-value SlotDirective used by existing tests / legacy callers
+	// has HasPlannedGridW=false → cap opts out by default.
+	PlannedGridW    float64
+	HasPlannedGridW bool
 }
 
 // SlotDirectiveFunc returns the plan's energy-allocation directive for
@@ -988,9 +990,9 @@ func ComputeDispatch(
 		// elsewhere in this package — below it, the live divergence
 		// is meter noise / smoothing residue and the energy path keeps
 		// following plan.
-		if currentDirective.PlannedGridW != nil && targetTotalW > 0 {
+		if currentDirective.HasPlannedGridW && targetTotalW > 0 {
 			const planGridDeadband = 100.0
-			gridErr := rawGridW - *currentDirective.PlannedGridW
+			gridErr := rawGridW - currentDirective.PlannedGridW
 			if gridErr > planGridDeadband {
 				adjusted := targetTotalW - gridErr
 				if adjusted < 0 {
