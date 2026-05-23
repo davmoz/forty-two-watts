@@ -1270,13 +1270,20 @@ func ComputeDispatch(
 	groupPV := map[string]float64{}
 	if len(state.InverterGroups) > 0 {
 		for _, r := range store.ReadingsByType(telemetry.DerPV) {
+			h := store.DriverHealth(r.Driver)
+			if h == nil || !h.IsOnline() {
+				continue
+			}
 			group := state.InverterGroups[r.Driver]
 			if group == "" {
 				continue // untagged PV: no locality signal, treat as AC-bus
 			}
+			if r.SmoothedW >= 0 {
+				continue // not generating right now
+			}
 			// PV is site-signed (negative = generating). Magnitude = surplus
 			// potentially routable DC-direct to the same-group battery.
-			groupPV[group] += math.Abs(r.SmoothedW)
+			groupPV[group] += -r.SmoothedW
 		}
 	}
 
@@ -1514,6 +1521,10 @@ func ComputePVCurtail(state *State, store *telemetry.Store) []CurtailTarget {
 		var drivers []pvD
 		var total float64
 		for _, r := range store.ReadingsByType(telemetry.DerPV) {
+			h := store.DriverHealth(r.Driver)
+			if h == nil || !h.IsOnline() {
+				continue
+			}
 			if !state.SupportsPVCurtail[r.Driver] {
 				continue
 			}

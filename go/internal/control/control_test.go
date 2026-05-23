@@ -1891,6 +1891,134 @@ func TestInverterAffinity_EndToEndViaComputeDispatch(t *testing.T) {
 	}
 }
 
+func TestInverterAffinity_IgnoresOfflinePVTelemetry(t *testing.T) {
+	store := seedStore(-3000, []struct {
+		name          string
+		currentW, soc float64
+	}{
+		{"ferroamp", 0, 0.5},
+		{"sungrow", 0, 0.5},
+	})
+	store.Update("ferroamp-pv", telemetry.DerPV, -3500, nil, nil)
+	store.DriverHealthMut("ferroamp-pv").SetOffline()
+
+	st := NewState(0, 0, "ferroamp")
+	st.Mode = ModeSelfConsumption
+	st.SlewRateW = 100000
+	st.MinDispatchIntervalS = 0
+	st.InverterGroups = map[string]string{
+		"ferroamp":    "ferroamp",
+		"ferroamp-pv": "ferroamp",
+		"sungrow":     "sungrow",
+	}
+
+	targets := ComputeDispatch(store, st, caps(map[string]float64{"ferroamp": 15200, "sungrow": 9600}), 11040)
+	got := map[string]float64{}
+	for _, t := range targets {
+		got[t.Driver] = t.TargetW
+	}
+	// With the PV driver offline there is no trustworthy DC-local signal,
+	// so charging falls back to capacity split. Old behaviour treated the
+	// stale -3.5 kW PV reading as live and routed almost all charge to Ferroamp.
+	if got["sungrow"] < 400 {
+		t.Errorf("sungrow target = %f — offline PV must not create a locality preference", got["sungrow"])
+	}
+}
+
+func TestInverterAffinity_IgnoresNonGeneratingPVTelemetry(t *testing.T) {
+	store := seedStore(-3000, []struct {
+		name          string
+		currentW, soc float64
+	}{
+		{"ferroamp", 0, 0.5},
+		{"sungrow", 0, 0.5},
+	})
+	store.Update("ferroamp-pv", telemetry.DerPV, 500, nil, nil) // standby/import, not generation
+	store.DriverHealthMut("ferroamp-pv").RecordSuccess()
+
+	st := NewState(0, 0, "ferroamp")
+	st.Mode = ModeSelfConsumption
+	st.SlewRateW = 100000
+	st.MinDispatchIntervalS = 0
+	st.InverterGroups = map[string]string{
+		"ferroamp":    "ferroamp",
+		"ferroamp-pv": "ferroamp",
+		"sungrow":     "sungrow",
+	}
+
+	targets := ComputeDispatch(store, st, caps(map[string]float64{"ferroamp": 15200, "sungrow": 9600}), 11040)
+	got := map[string]float64{}
+	for _, t := range targets {
+		got[t.Driver] = t.TargetW
+	}
+	if got["sungrow"] < 400 {
+		t.Errorf("sungrow target = %f — positive PV telemetry must not be counted as local generation", got["sungrow"])
+	}
+}
+
+// ---- PV curtailment ----
+
+func TestPVCurtailAllocatesOnlinePVDrivers(t *testing.T) {
+	store := telemetry.NewStore()
+	store.Update("pv-a", telemetry.DerPV, -3000, nil, nil)
+	store.DriverHealthMut("pv-a").RecordSuccess()
+	store.Update("pv-b", telemetry.DerPV, -1000, nil, nil)
+	store.DriverHealthMut("pv-b").RecordSuccess()
+
+	st := NewState(0, 0, "meter")
+	st.SupportsPVCurtail = map[string]bool{"pv-a": true, "pv-b": true}
+	st.SlotDirective = func(time.Time) (SlotDirective, bool) {
+		return SlotDirective{PVLimitW: 2000}, true
+	}
+
+	targets := ComputePVCurtail(st, store)
+	got := map[string]float64{}
+	for _, tg := range targets {
+		got[tg.Driver] = tg.LimitW
+	}
+	if math.Abs(got["pv-a"]-1500) > 1 || math.Abs(got["pv-b"]-500) > 1 {
+		t.Fatalf("curtail allocation = %+v, want pv-a≈1500 pv-b≈500", got)
+	}
+}
+
+func TestPVCurtailSkipsOfflinePVDriver(t *testing.T) {
+	store := telemetry.NewStore()
+	store.Update("pv-offline", telemetry.DerPV, -3000, nil, nil)
+	store.DriverHealthMut("pv-offline").SetOffline()
+
+	st := NewState(0, 0, "meter")
+	st.SupportsPVCurtail = map[string]bool{"pv-offline": true}
+	st.SlotDirective = func(time.Time) (SlotDirective, bool) {
+		return SlotDirective{PVLimitW: 1000}, true
+	}
+
+	targets := ComputePVCurtail(st, store)
+	if len(targets) != 0 {
+		t.Fatalf("offline PV driver must not receive curtail target, got %+v", targets)
+	}
+}
+
+func TestPVCurtailReleasesDriverThatWentOffline(t *testing.T) {
+	store := telemetry.NewStore()
+	store.Update("pv-offline", telemetry.DerPV, -3000, nil, nil)
+	store.DriverHealthMut("pv-offline").SetOffline()
+
+	st := NewState(0, 0, "meter")
+	st.SupportsPVCurtail = map[string]bool{"pv-offline": true}
+	st.LastCurtailedDrivers = map[string]bool{"pv-offline": true}
+	st.SlotDirective = func(time.Time) (SlotDirective, bool) {
+		return SlotDirective{PVLimitW: 1000}, true
+	}
+
+	targets := ComputePVCurtail(st, store)
+	if len(targets) != 1 {
+		t.Fatalf("want one release target, got %+v", targets)
+	}
+	if targets[0].Driver != "pv-offline" || targets[0].LimitW != 0 {
+		t.Fatalf("offline previously-curtailed driver should be released, got %+v", targets[0])
+	}
+}
+
 // Issue #167: planner_self has two discrete per-slot states — IDLE or
 // SELF_CONSUMPTION — both picked by the plan. The dispatch does not
 // second-guess the plan with live data. When the plan says idle, the

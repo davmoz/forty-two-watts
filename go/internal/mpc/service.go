@@ -44,12 +44,12 @@ type LoadpointProbe func(slotLenMin int) *LoadpointSpec
 // forecast from the SQLite store, reads current SoC from the telemetry
 // store, and re-plans on a ticker. The latest plan is cached.
 type Service struct {
-	Store    *state.Store
-	Tele     *telemetry.Store
-	Zone     string
-	BaseLoad float64 // baseline household load (W). 0 disables load assumption.
-	Horizon  time.Duration
-	Interval time.Duration
+	Store     *state.Store
+	Tele      *telemetry.Store
+	Zone      string
+	BaseLoad  float64 // baseline household load (W). 0 disables load assumption.
+	Horizon   time.Duration
+	Interval  time.Duration
 	PV        PVPredictor    // optional — overrides stored pv_w_estimated
 	Load      LoadPredictor  // optional — overrides flat BaseLoad
 	Price     PricePredictor // optional — fills in future slots when day-ahead isn't published yet
@@ -128,6 +128,14 @@ type Service struct {
 
 	stop chan struct{}
 	done chan struct{}
+}
+
+func (s *Service) driverOnline(name string) bool {
+	if s == nil || s.Tele == nil {
+		return false
+	}
+	h := s.Tele.DriverHealth(name)
+	return h != nil && h.IsOnline()
 }
 
 // New constructs a service. Caller wires it in main.go after store + telemetry.
@@ -435,19 +443,27 @@ func (s *Service) checkDivergence(ctx context.Context) {
 	if slot == nil {
 		return
 	}
-	// Live PV — sum all DerPV readings (site sign: negative = generating).
+	// Live PV — sum online DerPV readings only (site sign: negative =
+	// generating). Offline/stale DER readings stay cached in telemetry for UI
+	// continuity, but must not drive reactive replans.
 	var pvW float64
 	for _, r := range s.Tele.ReadingsByType(telemetry.DerPV) {
+		if !s.driverOnline(r.Driver) {
+			continue
+		}
 		pvW += r.SmoothedW
 	}
 
 	// Live load = grid − pv − bat when we have a site meter wired.
 	var loadW float64
 	haveLoad := false
-	if s.SiteMeter != "" {
+	if s.SiteMeter != "" && s.driverOnline(s.SiteMeter) {
 		if m := s.Tele.Get(s.SiteMeter, telemetry.DerMeter); m != nil {
 			var batW float64
 			for _, r := range s.Tele.ReadingsByType(telemetry.DerBattery) {
+				if !s.driverOnline(r.Driver) {
+					continue
+				}
 				batW += r.SmoothedW
 			}
 			evW := s.Tele.SumOnlineEVW()
