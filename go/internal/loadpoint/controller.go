@@ -698,6 +698,60 @@ func (c *Controller) RefreshVehicle(ctx context.Context, lpID string) error {
 	return c.send(ctx, driver, payload)
 }
 
+// ForceStartVehicle sends a generic `charge_start` to the loadpoint's
+// bound vehicle driver immediately, bypassing the auto-wake's
+// `vehicleWakeCooldown` + `wakeBackoffCooldown` throttle. Used by the
+// operator-driven "force start" API path when the auto-wake has
+// backed off and the operator wants to break the backoff (typical case:
+// car was unresponsive earlier, has since become reachable, the 10-min
+// stretched cooldown still has minutes to run, operator wants charging
+// to resume now).
+//
+// Side effects, in order:
+//  1. Reset the wake-attempt counter so subsequent auto-wakes start
+//     from a fresh cooldown.
+//  2. Bump wakeLast so the auto-wake loop will not duplicate this
+//     send on the same tick.
+//  3. Arm the wake-kick window so the next few dispatch ticks force
+//     the wallbox to signal at least min current — without it a
+//     successful charge_start lands on a 0 A wallbox and the car has
+//     nothing to negotiate with.
+//  4. Send the generic `charge_start` action (cross-driver protocol —
+//     Tesla, BMW, Audi drivers all implement it against their own
+//     back-ends).
+//
+// Returns the driver name actually targeted (empty string when no
+// driver is bound or the controller isn't wired) and any send error.
+// Empty driver + nil error means "no-op, nothing to send" — distinct
+// from a send error so the API layer can return 404 vs 502
+// appropriately.
+func (c *Controller) ForceStartVehicle(ctx context.Context, lpID string) (string, error) {
+	if c == nil || c.vehicleStatus == nil || c.send == nil {
+		return "", nil
+	}
+	driver, _, ok := c.vehicleStatus(lpID)
+	if !ok || driver == "" {
+		return "", nil
+	}
+	now := time.Now()
+	c.wakeMu.Lock()
+	if c.wakeLast == nil {
+		c.wakeLast = map[string]time.Time{}
+		c.wakeKickUntil = map[string]time.Time{}
+		c.wakeAttempts = map[string]int{}
+	}
+	delete(c.wakeAttempts, lpID)
+	c.wakeLast[lpID] = now
+	c.wakeKickUntil[lpID] = now.Add(wakeKickDuration)
+	c.wakeMu.Unlock()
+	payload, err := json.Marshal(map[string]any{"action": "charge_start"})
+	if err != nil {
+		return driver, err
+	}
+	slog.Info("loadpoint force-start (operator)", "lp", lpID, "vehicle_driver", driver)
+	return driver, c.send(ctx, driver, payload)
+}
+
 // wakeVehicleAuto sends a `wake_up` to the loadpoint's bound vehicle
 // driver, gated by the same `vehicleWakeCooldown` (5 min) the
 // charge_start auto-wake loop uses. Used for event-triggered wakes
