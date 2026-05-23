@@ -1602,6 +1602,18 @@ func main() {
 	// the Tesla / vehicle driver gets ground truth from the car, the
 	// plan should incorporate it (especially for EV target deadlines).
 	var vehicleReplanFired bool
+	// Per-loadpoint last observed draw for the EV-stop edge replan.
+	// A falling edge (was >100 W, now <50 W while still plugged in)
+	// signals the EV finished or paused itself — the slot's plan no
+	// longer reflects reality (battery may have been held at 0 to leave
+	// room for the EV; with EV gone the freed PV should be re-allocated).
+	// Cooldown shares the fuse-replan cooldown to keep per-second flap
+	// from spamming the optimizer.
+	evDrawPrev := map[string]float64{}
+	var lastEVStopReplan time.Time
+	const evStopReplanCooldown = 60 * time.Second
+	const evStopHigh = 100.0 // W — "was actually drawing"
+	const evStopLow = 50.0   // W — "now essentially zero"
 	for {
 		select {
 		case <-sigc:
@@ -1830,6 +1842,33 @@ func main() {
 				slog.Info("fuse-saturated → MPC replan triggered")
 			}
 			prevFuseSaturated = fuseSatNow
+
+			// EV-stop edge replan trigger: when an LP's draw drops
+			// from a clearly-charging value to ~0 while still plugged,
+			// the current plan slot's allocation (e.g. "idle, the EV
+			// takes the surplus") is stale — fire a replan so the DP
+			// re-routes the freed PV. Unplug edges are NOT a trigger:
+			// the plug-out itself toggles plugged_in→false which the
+			// scheduled replan path picks up, and chaining a replan
+			// there would race with the LP manager. Cooldown bounded
+			// to one replan per evStopReplanCooldown so a hardware
+			// flap doesn't storm the optimizer.
+			if mpcSvc != nil {
+				fired := false
+				for _, lp := range lpMgr.States() {
+					prev := evDrawPrev[lp.ID]
+					curr := lp.CurrentPowerW
+					if lp.PluggedIn && prev >= evStopHigh && curr < evStopLow &&
+						time.Since(lastEVStopReplan) > evStopReplanCooldown && !fired {
+						lastEVStopReplan = time.Now()
+						fired = true
+						go mpcSvc.ReplanWithReason(ctx, "loadpoint_ev_stopped")
+						slog.Info("loadpoint EV stopped → MPC replan triggered",
+							"lp", lp.ID, "prev_w", prev, "curr_w", curr)
+					}
+					evDrawPrev[lp.ID] = curr
+				}
+			}
 
 			// First-vehicle-SoC replan trigger: as soon as any
 			// DerVehicle driver is online and reporting SoC, redo the
