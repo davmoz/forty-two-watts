@@ -413,6 +413,51 @@ func (s *State) GetBatteryManualHold(now time.Time) (BatteryManualHold, bool) {
 	return s.ManualHold, true
 }
 
+func resetEnergyDispatchBookkeeping(state *State) {
+	state.currentDirective = SlotDirective{}
+	state.slotDelivered = 0
+	state.lastTickTs = time.Time{}
+}
+
+type plannerSelfDecision struct {
+	idleGate bool
+}
+
+func preparePlannerSelf(state *State, now time.Time) plannerSelfDecision {
+	state.SetGridTarget(0)
+	// Reset the energy-allocation bookkeeping so a future switch to
+	// planner_cheap / planner_arbitrage within the same 15-minute slot
+	// can't read stale `slotDelivered` accumulated before the operator
+	// hopped through planner_self. Without this reset, the SlotStart
+	// comparison in the energy path would match and skip its own rollover
+	// reset. Codex P2 on PR #131.
+	resetEnergyDispatchBookkeeping(state)
+
+	dir, planFresh := plannerSelfDirectiveAt(state, now)
+	if !planFresh {
+		if !state.PlanStale {
+			slog.Warn("planner_self: plan stale — reactive self_consumption, no idle gates")
+		}
+		state.PlanStale = true
+		return plannerSelfDecision{}
+	}
+
+	state.PlanStale = false
+	return plannerSelfDecision{idleGate: plannerSelfDirectiveIsIdle(dir)}
+}
+
+func plannerSelfDirectiveAt(state *State, now time.Time) (SlotDirective, bool) {
+	if state.SlotDirective == nil {
+		return SlotDirective{}, false
+	}
+	return state.SlotDirective(now)
+}
+
+func plannerSelfDirectiveIsIdle(dir SlotDirective) bool {
+	slotH := dir.SlotEnd.Sub(dir.SlotStart).Hours()
+	return slotH > 0 && math.Abs(dir.BatteryEnergyWh)/slotH < mpc.IdleGateThresholdW
+}
+
 // NewState creates default control state (port of Rust ControlState::new).
 func NewState(gridTargetW, gridToleranceW float64, siteMeter string) *State {
 	pi := NewPI(0.5, 0.1, 3000, 10000)
@@ -535,9 +580,7 @@ func ComputeDispatch(
 		// after the hold expires doesn't read stale state — same reset
 		// that the ModePlannerSelf branch performs below.
 		state.PI.Reset()
-		state.currentDirective = SlotDirective{}
-		state.slotDelivered = 0
-		state.lastTickTs = time.Time{}
+		resetEnergyDispatchBookkeeping(state)
 		state.PlanStale = false
 		state.SetGridTarget(0)
 		// Force the proportional distribution path. effectiveMode stays
@@ -550,35 +593,7 @@ func ComputeDispatch(
 		// Already handled — leave effectiveMode at ModeSelfConsumption.
 	case state.Mode == ModePlannerSelf:
 		effectiveMode = ModeSelfConsumption
-		state.SetGridTarget(0)
-		// Reset the energy-allocation bookkeeping so a future switch to
-		// planner_cheap / planner_arbitrage within the same 15-minute
-		// slot can't read stale `slotDelivered` accumulated before the
-		// operator hopped through planner_self. Without this reset, the
-		// `SlotStart` comparison in the energy path would match (still
-		// the same clock-aligned slot) and skip its own rollover reset
-		// — reading the pre-hop delivered-Wh number and over-commanding
-		// charge/discharge for the rest of the slot. Codex P2 on PR #131.
-		state.currentDirective = SlotDirective{}
-		state.slotDelivered = 0
-		state.lastTickTs = time.Time{}
-		planFresh := false
-		if state.SlotDirective != nil {
-			if dir, ok := state.SlotDirective(time.Now()); ok {
-				planFresh = true
-				state.PlanStale = false
-				slotH := dir.SlotEnd.Sub(dir.SlotStart).Hours()
-				if slotH > 0 && math.Abs(dir.BatteryEnergyWh)/slotH < mpc.IdleGateThresholdW {
-					plannerSelfIdleGate = true
-				}
-			}
-		}
-		if !planFresh {
-			if !state.PlanStale {
-				slog.Warn("planner_self: plan stale — reactive self_consumption, no idle gates")
-			}
-			state.PlanStale = true
-		}
+		plannerSelfIdleGate = preparePlannerSelf(state, time.Now()).idleGate
 	case state.Mode.IsPlannerMode():
 		// planner_cheap / planner_arbitrage.
 		if state.UseEnergyDispatch && state.SlotDirective != nil {
@@ -743,6 +758,7 @@ func ComputeDispatch(
 	for _, b := range onlineBats {
 		currentTotal += b.currentW
 	}
+	surplus := newSurplusAccounting(rawGridW, gridW, currentTotal, state)
 
 	// ---- Compute totalCorrection — paths diverge here ----
 	var totalCorrection float64
@@ -762,7 +778,7 @@ func ComputeDispatch(
 		// part of the meter residual; we only charge from surplus that
 		// would cross the site boundary after house + EV load.
 		state.PI.Reset()
-		desiredTotal := plannerSelfIdleDesiredTotal(rawGridW, currentTotal, state)
+		desiredTotal := plannerSelfIdleDesiredTotal(surplus, state)
 		totalCorrection = desiredTotal - currentTotal
 		// deliberately skip the deadband — it's a gridW check and
 		// doesn't see "battery wants to be at zero/charge-only but
@@ -920,15 +936,7 @@ func ComputeDispatch(
 		// EV for the same surplus PV. Final cap — runs AFTER the PV
 		// surplus absorber so the absorber can't override an EV reserve.
 		if state.EVSurplusOnlyReserveW > 0 && targetTotalW > 0 {
-			pvSurplus := -gridW + currentTotal
-			reserveRemaining := state.EVSurplusOnlyReserveW - state.EVChargingW
-			if reserveRemaining < 0 {
-				reserveRemaining = 0
-			}
-			ceiling := pvSurplus - reserveRemaining
-			if ceiling < 0 {
-				ceiling = 0
-			}
+			ceiling := surplus.chargeCeilingAfterEVReserveW()
 			if targetTotalW > ceiling {
 				targetTotalW = ceiling
 			}
@@ -1022,10 +1030,7 @@ func ComputeDispatch(
 		// opposite of what we want.
 		biasedGridW := gridW
 		if state.EVSurplusOnlyReserveW > 0 && effectiveMode == ModeSelfConsumption {
-			reserveRemaining := state.EVSurplusOnlyReserveW - state.EVChargingW
-			if reserveRemaining < 0 {
-				reserveRemaining = 0
-			}
+			reserveRemaining := surplus.evReserveRemainingW
 			if gridW < -reserveRemaining {
 				biasedGridW = gridW + reserveRemaining
 			} else if gridW < 0 {
@@ -1178,15 +1183,7 @@ func ComputeDispatch(
 		if surplusActive {
 			targetTotal2 := currentTotal + totalCorrection
 			if targetTotal2 > 0 {
-				pvSurplus := -gridW + currentTotal
-				reserveRemaining := state.EVSurplusOnlyReserveW - state.EVChargingW
-				if reserveRemaining < 0 {
-					reserveRemaining = 0
-				}
-				ceiling := pvSurplus - reserveRemaining
-				if ceiling < 0 {
-					ceiling = 0
-				}
+				ceiling := surplus.chargeCeilingAfterEVReserveW()
 				if targetTotal2 > ceiling {
 					totalCorrection = ceiling - currentTotal
 				}
@@ -1654,30 +1651,75 @@ func anyBatteryDischarging(bats []batteryInfo) bool {
 	return false
 }
 
-func plannerSelfIdleDesiredTotal(rawGridW, currentTotal float64, state *State) float64 {
+type surplusAccounting struct {
+	rawGridW            float64
+	effectiveGridW      float64
+	currentBatteryW     float64
+	evReserveRemainingW float64
+}
+
+func newSurplusAccounting(rawGridW, effectiveGridW, currentBatteryW float64, state *State) surplusAccounting {
+	return surplusAccounting{
+		rawGridW:            rawGridW,
+		effectiveGridW:      effectiveGridW,
+		currentBatteryW:     currentBatteryW,
+		evReserveRemainingW: evReserveRemainingW(state),
+	}
+}
+
+func evReserveRemainingW(state *State) float64 {
+	if state == nil || state.EVSurplusOnlyReserveW <= 0 {
+		return 0
+	}
+	remaining := state.EVSurplusOnlyReserveW - state.EVChargingW
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+func (a surplusAccounting) rawMeterWWithoutBattery() float64 {
+	return a.rawGridW - a.currentBatteryW
+}
+
+func (a surplusAccounting) trueMeterExportWithoutBatteryW() float64 {
+	exportW := -a.rawMeterWWithoutBattery()
+	if exportW < 0 {
+		return 0
+	}
+	return exportW
+}
+
+func (a surplusAccounting) idleChargeOnlySurplusW(thresholdW float64) float64 {
+	chargeW := a.trueMeterExportWithoutBatteryW() - a.evReserveRemainingW
+	if chargeW <= thresholdW {
+		return 0
+	}
+	return chargeW
+}
+
+func (a surplusAccounting) effectiveChargeSurplusW() float64 {
+	surplusW := -a.effectiveGridW + a.currentBatteryW
+	if surplusW < 0 {
+		return 0
+	}
+	return surplusW
+}
+
+func (a surplusAccounting) chargeCeilingAfterEVReserveW() float64 {
+	ceiling := a.effectiveChargeSurplusW() - a.evReserveRemainingW
+	if ceiling < 0 {
+		return 0
+	}
+	return ceiling
+}
+
+func plannerSelfIdleDesiredTotal(surplus surplusAccounting, state *State) float64 {
 	threshold := mpc.IdleGateThresholdW
 	if state != nil && state.PVSurplusAbsorbThresholdW > 0 {
 		threshold = state.PVSurplusAbsorbThresholdW
 	}
-
-	// Remove the current battery contribution from the live meter to
-	// estimate the site residual if the battery went idle right now.
-	// Negative baseGridW means PV still exceeds house + EV load.
-	baseGridW := rawGridW - currentTotal
-
-	reserveRemaining := 0.0
-	if state != nil && state.EVSurplusOnlyReserveW > 0 {
-		reserveRemaining = state.EVSurplusOnlyReserveW - state.EVChargingW
-		if reserveRemaining < 0 {
-			reserveRemaining = 0
-		}
-	}
-
-	chargeFromSurplusW := -baseGridW - reserveRemaining
-	if chargeFromSurplusW <= threshold {
-		return 0
-	}
-	return chargeFromSurplusW
+	return surplus.idleChargeOnlySurplusW(threshold)
 }
 
 func floorNegativeTargets(targets []DispatchTarget) []DispatchTarget {

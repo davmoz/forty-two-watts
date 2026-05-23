@@ -1689,6 +1689,65 @@ func TestPlannerSelfPlanDischargeStillChargesOnLiveExport(t *testing.T) {
 	}
 }
 
+func TestPlannerSelfParticipantMatchesManualSelfConsumption(t *testing.T) {
+	now := time.Now()
+	dir := SlotDirective{
+		SlotStart:       now,
+		SlotEnd:         now.Add(15 * time.Minute),
+		BatteryEnergyWh: -800, // participant slot, not idle/charge-only
+		Strategy:        "self_consumption",
+	}
+	tests := []struct {
+		name  string
+		gridW float64
+	}{
+		{name: "import", gridW: 2000},
+		{name: "export", gridW: -1200},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manualStore := seedStore(tt.gridW, []struct {
+				name          string
+				currentW, soc float64
+			}{
+				{"ferroamp", 0, 0.5},
+			})
+			plannerStore := seedStore(tt.gridW, []struct {
+				name          string
+				currentW, soc float64
+			}{
+				{"ferroamp", 0, 0.5},
+			})
+
+			manual := NewState(0, 0, "ferroamp")
+			manual.Mode = ModeSelfConsumption
+			manual.SlewRateW = 10000
+			manual.MinDispatchIntervalS = 0
+
+			planner := NewState(0, 0, "ferroamp")
+			planner.Mode = ModePlannerSelf
+			planner.UseEnergyDispatch = true
+			planner.SlewRateW = 10000
+			planner.MinDispatchIntervalS = 0
+			planner.SlotDirective = func(time.Time) (SlotDirective, bool) { return dir, true }
+
+			want := ComputeDispatch(manualStore, manual, caps(map[string]float64{"ferroamp": 15200}), 11040)
+			got := ComputeDispatch(plannerStore, planner, caps(map[string]float64{"ferroamp": 15200}), 11040)
+			if len(got) != len(want) {
+				t.Fatalf("target count mismatch: got %d want %d (%+v vs %+v)", len(got), len(want), got, want)
+			}
+			for i := range got {
+				if got[i].Driver != want[i].Driver {
+					t.Fatalf("target[%d] driver = %s, want %s", i, got[i].Driver, want[i].Driver)
+				}
+				if math.Abs(got[i].TargetW-want[i].TargetW) > 1 {
+					t.Errorf("target[%d] = %f W, want manual self_consumption parity %f W", i, got[i].TargetW, want[i].TargetW)
+				}
+			}
+		})
+	}
+}
+
 // Multi-cycle steady-state: idle-gated battery starts far from 0 and must
 // reach 0 monotonically (no PI integral-windup overshoot, slew respected).
 // Guards against the "gate goes on but PI wound up from earlier cycles
@@ -2283,6 +2342,82 @@ func TestPlannerSelfIdleGateChargesOnlyActualMeterSurplusWithEVActive(t *testing
 	}
 	if math.Abs(targets[0].TargetW-1000) > 1 {
 		t.Errorf("TargetW = %f — idle gate should absorb only actual meter export, want ~1000", targets[0].TargetW)
+	}
+}
+
+func TestPlannerSelfIdleGateLeavesSurplusOnlyEVReserve(t *testing.T) {
+	now := time.Now()
+	dir := SlotDirective{
+		SlotStart:       now,
+		SlotEnd:         now.Add(15 * time.Minute),
+		BatteryEnergyWh: 0,
+		Strategy:        "self_consumption",
+	}
+	// The meter exports 3 kW while an EV is already taking 1 kW. A
+	// surplus-only EV controller has asked us to leave 3 kW total reserved,
+	// so the battery may absorb only the 1 kW beyond the remaining EV headroom.
+	store := seedStore(-3000, []struct {
+		name          string
+		currentW, soc float64
+	}{
+		{"ferroamp", 0, 0.5},
+	})
+	st := NewState(0, 0, "ferroamp")
+	st.Mode = ModePlannerSelf
+	st.UseEnergyDispatch = true
+	st.EVChargingW = 1000
+	st.EVSurplusOnlyReserveW = 3000
+	st.SlewRateW = 10000
+	st.MinDispatchIntervalS = 0
+	st.SlotDirective = func(time.Time) (SlotDirective, bool) { return dir, true }
+
+	targets := ComputeDispatch(store, st, caps(map[string]float64{"ferroamp": 15200}), 11040)
+	if len(targets) != 1 {
+		t.Fatalf("want 1 target, got %d", len(targets))
+	}
+	if math.Abs(targets[0].TargetW-1000) > 1 {
+		t.Errorf("TargetW = %f — idle gate must leave surplus-only EV reserve; want ~1000", targets[0].TargetW)
+	}
+}
+
+func TestPlannerSelfIdleGateSplitsLiveSurplusAcrossBatteries(t *testing.T) {
+	now := time.Now()
+	dir := SlotDirective{
+		SlotStart:       now,
+		SlotEnd:         now.Add(15 * time.Minute),
+		BatteryEnergyWh: 0,
+		Strategy:        "self_consumption",
+	}
+	store := seedStore(-4000, []struct {
+		name          string
+		currentW, soc float64
+	}{
+		{"ferroamp", 0, 0.5},
+		{"sungrow", 0, 0.5},
+	})
+	st := NewState(0, 0, "ferroamp")
+	st.Mode = ModePlannerSelf
+	st.UseEnergyDispatch = true
+	st.SlewRateW = 100000
+	st.MinDispatchIntervalS = 0
+	st.SlotDirective = func(time.Time) (SlotDirective, bool) { return dir, true }
+
+	targets := ComputeDispatch(store, st, caps(map[string]float64{
+		"ferroamp": 15200,
+		"sungrow":  9600,
+	}), 11040)
+	if len(targets) != 2 {
+		t.Fatalf("want 2 targets, got %d: %+v", len(targets), targets)
+	}
+	var sum float64
+	for _, tg := range targets {
+		if tg.TargetW <= 0 {
+			t.Errorf("%s target = %f W — idle live surplus must not create a discharge/hold target", tg.Driver, tg.TargetW)
+		}
+		sum += tg.TargetW
+	}
+	if math.Abs(sum-4000) > 1 {
+		t.Errorf("aggregate target = %f W — idle-gate should split the full true live surplus, want ~4000", sum)
 	}
 }
 
