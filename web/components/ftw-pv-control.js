@@ -308,14 +308,17 @@ class FtwPvControl extends FtwElement {
   }
 
   _loadCatalog() {
-    return fetch("/api/drivers/catalog")
+    // Source of truth for the picker is the user's config — only
+    // drivers explicitly opted in via supports_pv_curtail: true should
+    // appear. The catalog endpoint advertises what the lua *can* do;
+    // the YAML says what the operator *wants* dispatched.
+    return fetch("/api/config")
       .then((r) => r.json())
-      .then((entries) => {
-        const arr = Array.isArray(entries) ? entries : (entries.drivers || []);
-        this._capableDrivers = arr.filter((e) => {
-          const caps = e.capabilities || e.Capabilities || [];
-          return caps.indexOf("pv-curtail") !== -1;
-        });
+      .then((cfg) => {
+        const drivers = (cfg && cfg.drivers) || [];
+        this._capableDrivers = drivers
+          .filter((d) => d && d.supports_pv_curtail === true)
+          .map((d) => ({ id: d.name, name: d.name }));
       })
       .catch(() => { this._capableDrivers = []; });
   }
