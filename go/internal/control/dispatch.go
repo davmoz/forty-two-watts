@@ -227,6 +227,16 @@ type State struct {
 	// SurplusOnly && PluggedIn. Set to 0 when no such LP is connected,
 	// in which case all behaviour reverts to the pre-existing path.
 	EVSurplusOnlyReserveW float64
+
+	// EVCurtailHeadroomW is the parallel quantity sized for the
+	// PV-curtail decision. EVSurplusOnlyReserveW above is intentionally
+	// 0 for plugged-but-not-drawing EVs (so the battery can claim
+	// surplus a refusing EV won't), which is wrong when deciding
+	// whether to cut PV — a stopped EV with SoC headroom would start
+	// drawing if PV were allowed to grow above its min charge.
+	// loadpoint.SurplusPotentialW computes this more permissive
+	// reserve and main.go writes it here each tick.
+	EVCurtailHeadroomW float64
 	// BatteryCoversEV overrides the default EV-exclusion behaviour. When
 	// false (default), EVChargingW is subtracted from the meter reading
 	// before the PI runs so batteries don't shuffle energy through the
@@ -1986,8 +1996,14 @@ func liveCurtailLimitW(state *State, store *telemetry.Store) (float64, bool) {
 		batHeadroomW += capW
 	}
 
-	// EV reserve: surplus_only loadpoints that want PV.
-	evReserveW := state.EVSurplusOnlyReserveW
+	// EV reserve: prefer the curtail-specific value (counts plugged-
+	// but-stopped EVs with SoC headroom) over the dispatch reserve
+	// (which excludes them on purpose). Falls back to the dispatch
+	// reserve if main.go hasn't wired the new field yet.
+	evReserveW := state.EVCurtailHeadroomW
+	if evReserveW <= 0 {
+		evReserveW = state.EVSurplusOnlyReserveW
+	}
 	if evReserveW < 0 {
 		evReserveW = 0
 	}

@@ -394,6 +394,26 @@ func TestComputePVCurtail_EVReserveLiftsCap(t *testing.T) {
 	}
 }
 
+// EVCurtailHeadroomW lifts the cap even when EVSurplusOnlyReserveW is
+// zero (plugged-but-stopped EV with SoC headroom). That's the case
+// main.go fills with loadpoint.SurplusPotentialW.
+func TestComputePVCurtail_EVCurtailHeadroomLiftsCap(t *testing.T) {
+	st := NewState(0, 100, "meter")
+	st.SlotDirective = stubSlotDirective(SlotDirective{PVLimitW: 500})
+	st.SupportsPVCurtail = map[string]bool{"solaredge": true}
+	st.EVSurplusOnlyReserveW = 0    // EV isn't drawing — dispatch reserve is 0
+	st.EVCurtailHeadroomW = 11000   // but it COULD draw up to 11 kW if PV grew
+	store := telemetry.NewStore()
+	emitPV(t, store, "solaredge", -3000)
+	emitBattery(t, store, "pixii", 0, 99.5)
+	emitMeter(t, store, "meter", -3000)
+
+	got := findCurtail(ComputePVCurtail(st, store))
+	if len(got) != 0 {
+		t.Errorf("stopped-EV-with-headroom should suppress curtail; got %+v", got)
+	}
+}
+
 // Manual hold ignores all the live-limit logic — operator override
 // must be verbatim, including when the limit would otherwise be lifted.
 func TestComputePVCurtail_ManualHoldBypassesLiveLimit(t *testing.T) {
