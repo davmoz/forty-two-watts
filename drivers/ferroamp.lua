@@ -80,6 +80,21 @@ local STALE_AFTER_MS = 30000
 local SKIP_BATTERY = false
 local last_control_mode = nil
 
+-- Optional config knob: per-ESO usable capacity in kWh, keyed on the
+-- ESO id string (matches the `id.val` field in extapi/data/eso). When
+-- provided, battery.soc is reported as a capacity-weighted aggregate
+-- instead of the flat arithmetic mean. Useful on heterogeneous clusters
+-- where Ferroamp's own app shows a different number than our mean:
+-- e.g. 2×ESO-15 (newer) at 87% + 2×ESO-7.7 (older) at 38.6% averages to
+-- 62.8%, but Ferroamp's capacity-weighted view sits closer to 70%+.
+-- Format in YAML:
+--   eso_capacity_kwh:
+--     "26040075": 15.0
+--     "21030026": 7.7
+-- Units with no entry contribute their soc with weight = average of the
+-- configured weights (so a partial config doesn't silently zero them).
+local ESO_CAPACITY_KWH = {}
+
 -- Multi-ESO dispatch scaling. The EnergyHub divides a discharge/charge
 -- setpoint evenly across ALL ESOs it knows about, including units pinned
 -- at their SoC floor/ceiling that physically refuse to respond. On a
@@ -258,6 +273,25 @@ function driver_init(config)
         host.log("info", "Ferroamp: skip_battery=true — battery emission disabled")
     end
 
+    -- Per-ESO capacities for the weighted-SoC aggregation. We accept
+    -- whatever map the YAML hands us; ids are coerced to strings so a
+    -- user writing them bare (no quotes) still hits the lookup. Values
+    -- below 0.1 kWh are ignored — almost certainly a typo, and a tiny
+    -- weight near zero distorts the weighted mean.
+    if config and config.eso_capacity_kwh then
+        local n = 0
+        for k, v in pairs(config.eso_capacity_kwh) do
+            local kwh = tonumber(v)
+            if kwh and kwh >= 0.1 then
+                ESO_CAPACITY_KWH[tostring(k)] = kwh
+                n = n + 1
+            end
+        end
+        if n > 0 then
+            host.log("info", "Ferroamp: loaded capacity weights for " .. n .. " ESO(s) — bat_soc will be capacity-weighted")
+        end
+    end
+
     -- Subscribe to telemetry topics
     host.mqtt_subscribe("extapi/data/ehub")
     host.mqtt_subscribe("extapi/data/eso")
@@ -422,6 +456,7 @@ function driver_poll()
         local v_sum, v_n   = 0, 0
         local a_sum, a_n   = 0, 0
         local soc_sum, soc_n = 0, 0
+        local soc_wsum, cap_sum = 0, 0  -- capacity-weighted SoC accumulators
         local udc_sum, udc_n = 0, 0
         local wprod_sum, wprod_n = 0, 0
         local wcons_sum, wcons_n = 0, 0
@@ -429,7 +464,19 @@ function driver_poll()
         local n_eso = 0
         local n_discharge_capable, n_charge_capable = 0, 0
 
-        for _, d in pairs(eso_data_by_id) do
+        -- Fallback weight for ESOs not listed in ESO_CAPACITY_KWH: the
+        -- mean of the configured weights. Picking the mean (not 0, not 1)
+        -- means a partial config doesn't silently exclude unknown units
+        -- from the weighted aggregate. If the user lists zero ESOs we
+        -- never enter the weighted branch — `cap_sum > 0` gates it.
+        local default_cap = nil
+        do
+            local s, n = 0, 0
+            for _, kwh in pairs(ESO_CAPACITY_KWH) do s = s + kwh; n = n + 1 end
+            if n > 0 then default_cap = s / n end
+        end
+
+        for id, d in pairs(eso_data_by_id) do
             n_eso = n_eso + 1
             local u = tonumber(extract_val(d, "ubat"))
             local i = tonumber(extract_val(d, "ibat"))
@@ -444,6 +491,11 @@ function driver_poll()
             if soc then
                 if soc > 1 then soc = soc / 100 end
                 soc_sum = soc_sum + soc; soc_n = soc_n + 1
+                local cap = ESO_CAPACITY_KWH[tostring(id)] or default_cap
+                if cap then
+                    soc_wsum = soc_wsum + soc * cap
+                    cap_sum  = cap_sum  + cap
+                end
                 if soc >= DISCHARGE_FLOOR_SOC then
                     n_discharge_capable = n_discharge_capable + 1
                 end
@@ -494,13 +546,46 @@ function driver_poll()
         if battery then
             if v_n   > 0 then battery.v = v_sum / v_n end
             if a_n   > 0 then battery.a = a_sum end           -- sum, not avg: parallel currents add
-            if soc_n > 0 then battery.soc = soc_sum / soc_n end
+
+            -- SoC selection on multi-ESO sites. Priority:
+            --   1. Capacity-weighted mean — when the user has configured
+            --      per-ESO capacities (eso_capacity_kwh in YAML). On
+            --      heterogeneous clusters this is the only number that
+            --      tracks Ferroamp's own app, because flat means hide
+            --      the fact that a 15 kWh unit at 87% contributes 4× the
+            --      usable energy of a 7.7 kWh unit at 38.6%.
+            --   2. ehub.soc — kept as a fallback in case some Ferroamp
+            --      firmware publishes it (verified absent on the
+            --      Stefan-site firmware 2026-05-26 but cheap to leave in).
+            --   3. Arithmetic mean of per-ESO soc — the historical
+            --      behaviour. Always emitted as bat_soc_eso_mean for
+            --      observability even when one of the others wins.
+            local soc_eso_mean
+            if soc_n > 0 then soc_eso_mean = soc_sum / soc_n end
+            local soc_weighted
+            if cap_sum > 0 then soc_weighted = soc_wsum / cap_sum end
+            local soc_ehub
+            if ehub_data then
+                soc_ehub = tonumber(extract_val(ehub_data, "soc"))
+                if soc_ehub and soc_ehub > 1 then soc_ehub = soc_ehub / 100 end
+            end
+            if soc_weighted then
+                battery.soc = soc_weighted
+            elseif soc_ehub then
+                battery.soc = soc_ehub
+            elseif soc_eso_mean then
+                battery.soc = soc_eso_mean
+            end
+
             if wprod_n > 0 then battery.discharge_wh = mj_to_wh(wprod_sum) end
             if wcons_n > 0 then battery.charge_wh    = mj_to_wh(wcons_sum) end
 
             host.emit("battery", battery)
             if battery.v then host.emit_metric("battery_dc_v", battery.v) end
             if battery.a then host.emit_metric("battery_dc_a", battery.a) end
+            if soc_ehub     then host.emit_metric("bat_soc_ehub",     soc_ehub)     end
+            if soc_eso_mean then host.emit_metric("bat_soc_eso_mean", soc_eso_mean) end
+            if soc_weighted then host.emit_metric("bat_soc_weighted", soc_weighted) end
 
             if n_eso > 0 then
                 host.emit_metric("eso_count", n_eso)
