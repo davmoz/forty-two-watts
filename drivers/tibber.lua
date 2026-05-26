@@ -119,6 +119,18 @@ local function resolve_home_id()
     host.log("error", "Tibber: api_key resolves to no homes (check token permissions)")
     return false
   end
+  if #homes > 1 then
+    -- Multi-home Tibber accounts (e.g. house + cabin) must not be
+    -- silently bound to the first home — picking the wrong one would
+    -- feed unrelated grid power into control. Require explicit choice.
+    local ids = {}
+    for i, h in ipairs(homes) do ids[i] = tostring(h.id) end
+    host.log("error",
+      "Tibber: api_key resolves to " .. tostring(#homes) ..
+      " homes (" .. table.concat(ids, ", ") ..
+      "); set `home_id` explicitly in the driver config to pick one")
+    return false
+  end
   S.home_id = homes[1].id
   host.set_sn(S.home_id)
   host.log("info", "Tibber: home_id = " .. tostring(S.home_id))
@@ -163,8 +175,11 @@ end
 local function ws_subscribe()
   if S.subscribed then return end
   if not S.home_id then return end
+  -- Pass home_id via GraphQL variables, never interpolated into the
+  -- query string — keeps a malformed or hostile config value from
+  -- breaking parse or injecting fragments.
   local q =
-    "subscription{liveMeasurement(homeId:\"" .. S.home_id .. "\"){" ..
+    "subscription($homeId: ID!){liveMeasurement(homeId: $homeId){" ..
     "power powerProduction " ..
     "accumulatedConsumption accumulatedProduction " ..
     "voltagePhase1 voltagePhase2 voltagePhase3 " ..
@@ -174,7 +189,10 @@ local function ws_subscribe()
   local payload = host.json_encode({
     id      = "lm",
     type    = "subscribe",
-    payload = { query = q },
+    payload = {
+      query     = q,
+      variables = { homeId = S.home_id },
+    },
   })
   local _, err = host.ws_send(payload)
   if err then

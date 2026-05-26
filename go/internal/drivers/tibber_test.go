@@ -173,8 +173,14 @@ func TestTibberDriverSubscribesAfterConnectionAck(t *testing.T) {
 	if !strings.Contains(sub, `"type":"subscribe"`) {
 		t.Errorf("second frame = %s, want subscribe", sub)
 	}
-	if !strings.Contains(sub, `liveMeasurement(homeId:\"home-xyz\")`) {
-		t.Errorf("subscribe must reference home_id home-xyz; got %s", sub)
+	// home_id flows through GraphQL variables, not the query body, so
+	// a hostile config value can't break parse / inject fragments.
+	if !strings.Contains(sub, `liveMeasurement(homeId: $homeId)`) {
+		t.Errorf("subscribe must reference homeId via $homeId variable; got %s", sub)
+	}
+	if !strings.Contains(sub, `"variables":{"homeId":"home-xyz"}`) &&
+		!strings.Contains(sub, `"variables":{"homeId":\"home-xyz\"}`) {
+		t.Errorf("subscribe must pass home_id home-xyz via variables; got %s", sub)
 	}
 	if !strings.Contains(sub, "power") || !strings.Contains(sub, "currentL1") {
 		t.Errorf("subscribe query missing key fields; got %s", sub)

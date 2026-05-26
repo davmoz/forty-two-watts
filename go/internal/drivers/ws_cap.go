@@ -81,8 +81,12 @@ func (g *gorillaWS) Open(url string, headers map[string]string) error {
 	if err != nil {
 		return fmt.Errorf("ws dial: %w", err)
 	}
-	// Set a generous read deadline; the read pump bumps it on every
-	// pong. Tibber pings every 10 s; 60 s is comfortable headroom.
+	// Set a generous read deadline. Tibber's graphql-transport-ws
+	// keepalive is a JSON text "ping" frame, NOT a WS control ping —
+	// so SetPongHandler never fires on a healthy Tibber stream and
+	// the read pump must refresh the deadline itself on every frame.
+	// The pong handler is kept as defence-in-depth for servers that
+	// do send control-frame pongs.
 	conn.SetReadLimit(1 << 20) // 1 MiB per frame is plenty for GraphQL
 	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	conn.SetPongHandler(func(string) error {
@@ -126,6 +130,10 @@ func (g *gorillaWS) readPump() {
 			}
 			return
 		}
+		// Frame arrived — push the read deadline forward. Without this
+		// a brief data lull on a healthy stream (no traffic ≥60 s) would
+		// time out and tear down the connection.
+		_ = c.SetReadDeadline(time.Now().Add(60 * time.Second))
 		g.mu.Lock()
 		// Cap the inbound queue at 1024 frames to bound memory if the
 		// driver's poll loop stalls. Drop oldest on overflow; the driver
