@@ -32,6 +32,10 @@
       <a id="open-dashboard" href="#"><button class="primary">Open dashboard</button></a>
       <button id="signout">Sign out</button>
     </div>
+    <div id="backup-nudge" class="muted" style="display:none; margin-top:1rem; border-top:1px solid var(--line,#ddd); padding-top:1rem;">
+      <strong>Add a backup passkey.</strong> You have one passkey. If you lose this device, a second passkey (another phone, a laptop, or a security key) keeps you in — otherwise your only way back is on your home WiFi.
+      <div class="row"><button id="add-backup-btn">Add a backup passkey</button></div>
+    </div>
     <p class="muted">Manage enrolled devices on the dashboard's Settings → Trusted devices tab.</p>
   </div>
 
@@ -71,6 +75,8 @@
       if (me) {
         document.getElementById("device-name").textContent = me.friendly_name || "(unnamed)";
         document.getElementById("open-dashboard").href = base + "/";
+        const nudge = document.getElementById("backup-nudge");
+        nudge.style.display = (me.devices_enrolled === 1) ? "block" : "none";
         show("signed-in");
         return;
       }
@@ -91,6 +97,7 @@
 
     document.getElementById("login-btn").onclick = () => location.href = "./login.html";
     document.getElementById("add-device-btn").onclick = () => location.href = "./enroll.html";
+    document.getElementById("add-backup-btn").onclick = () => location.href = "./enroll.html";
 
     refresh().catch(e => {
       document.getElementById("loading").innerHTML = '<div class="err">' + e.message + '</div>';
