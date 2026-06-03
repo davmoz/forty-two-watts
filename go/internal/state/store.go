@@ -459,7 +459,9 @@ func (s *Store) migrate() error {
 			friendly_name TEXT    NOT NULL,
 			created_at_ms INTEGER NOT NULL,
 			last_used_ms  INTEGER NOT NULL DEFAULT 0,
-			wallet_handle TEXT    NOT NULL DEFAULT ''
+			wallet_handle TEXT    NOT NULL DEFAULT '',
+			backup_eligible INTEGER NOT NULL DEFAULT 0,
+			backup_state    INTEGER NOT NULL DEFAULT 0
 		) STRICT`,
 	}
 	for _, stmt := range stmts {
@@ -470,6 +472,14 @@ func (s *Store) migrate() error {
 	if err := s.addColumnIfMissing("trusted_devices", "wallet_handle",
 		"wallet_handle TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("migrate trusted_devices.wallet_handle: %w", err)
+	}
+	for _, col := range []struct{ name, ddl string }{
+		{"backup_eligible", "backup_eligible INTEGER NOT NULL DEFAULT 0"},
+		{"backup_state", "backup_state INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := s.addColumnIfMissing("trusted_devices", col.name, col.ddl); err != nil {
+			return fmt.Errorf("migrate trusted_devices.%s: %w", col.name, err)
+		}
 	}
 	return nil
 }

@@ -188,6 +188,10 @@ func (s *Server) buildOwnerUser() (*ownerUser, error) {
 		creds = append(creds, webauthn.Credential{
 			ID:        d.CredentialID,
 			PublicKey: d.PublicKey,
+			Flags: webauthn.CredentialFlags{
+				BackupEligible: d.BackupEligible,
+				BackupState:    d.BackupState,
+			},
 			Authenticator: webauthn.Authenticator{
 				AAGUID:    d.AAGUID,
 				SignCount: d.SignCount,
@@ -537,14 +541,16 @@ func (s *Server) handleOwnerEnrollFinish(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	dev := state.TrustedDevice{
-		CredentialID: cred.ID,
-		PublicKey:    cred.PublicKey,
-		SignCount:    cred.Authenticator.SignCount,
-		AAGUID:       cred.Authenticator.AAGUID,
-		Transports:   transports,
-		FriendlyName: friendlyName,
-		CreatedAtMs:  time.Now().UnixMilli(),
-		WalletHandle: string(walletHandle),
+		CredentialID:   cred.ID,
+		PublicKey:      cred.PublicKey,
+		SignCount:      cred.Authenticator.SignCount,
+		AAGUID:         cred.Authenticator.AAGUID,
+		Transports:     transports,
+		FriendlyName:   friendlyName,
+		CreatedAtMs:    time.Now().UnixMilli(),
+		WalletHandle:   string(walletHandle),
+		BackupEligible: cred.Flags.BackupEligible,
+		BackupState:    cred.Flags.BackupState,
 	}
 	if err := s.deps.State.SaveTrustedDevice(dev); err != nil {
 		http.Error(w, fmt.Sprintf("save device: %v", err), http.StatusInternalServerError)
