@@ -134,6 +134,63 @@ func TestOwnerAccessLoginStartRequiresEnrolledDevice(t *testing.T) {
 	}
 }
 
+// A relay-tunnelled request (carrying the trusted tunnel marker) must NOT
+// inherit LAN-bypass even though it arrives at a loopback host. This is the
+// single most important regression in the whole feature: without it every
+// remote request silently skips the passkey.
+func TestOwnerAccessTunneledRequestNeverBypasses(t *testing.T) {
+	d := minDeps(t)
+	d.OwnerAccessLANBypass = true // bypass ON
+	d.TunnelMarker = "test-marker-secret"
+	srv := New(d)
+
+	// Marked + loopback host + no cookie → must be treated as remote.
+	req := httptest.NewRequest("GET", "/api/owner-access/devices", nil)
+	req.Host = "127.0.0.1:8080"
+	req.Header.Set("X-FTW-Tunnel", "test-marker-secret")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != 401 {
+		t.Fatalf("tunnelled request must require auth, got %d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+// An UNMARKED loopback/LAN request still bypasses when LANBypass is on.
+func TestOwnerAccessUnmarkedRequestStillBypasses(t *testing.T) {
+	d := minDeps(t)
+	d.OwnerAccessLANBypass = true
+	d.TunnelMarker = "test-marker-secret"
+	srv := New(d)
+
+	req := httptest.NewRequest("GET", "/api/owner-access/devices", nil)
+	req.Host = "127.0.0.1:8080"
+	// no X-FTW-Tunnel header
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("unmarked LAN request should bypass, got %d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+// A forged marker that doesn't match the per-process secret is NOT treated
+// as a tunnel (constant-time compare); it just behaves like a normal LAN
+// client (still bypassed) — never an escalation.
+func TestOwnerAccessForgedMarkerIsNotTunnel(t *testing.T) {
+	d := minDeps(t)
+	d.OwnerAccessLANBypass = true
+	d.TunnelMarker = "the-real-secret"
+	srv := New(d)
+
+	req := httptest.NewRequest("GET", "/api/owner-access/devices", nil)
+	req.Host = "127.0.0.1:8080"
+	req.Header.Set("X-FTW-Tunnel", "a-wrong-guess")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("wrong marker must behave as LAN (bypass), got %d", rec.Code)
+	}
+}
+
 func contains(haystack, needle string) bool {
 	return strings.Contains(haystack, needle)
 }

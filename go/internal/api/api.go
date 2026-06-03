@@ -168,6 +168,15 @@ type Deps struct {
 	// internet directly (without the relay in front).
 	OwnerAccessLANBypass bool
 
+	// TunnelMarker is a per-process random secret. The relay long-poll
+	// reverse-proxy (cmd/forty-two-watts/owner_relay_register.go) sets it
+	// as the X-FTW-Tunnel header on every request it forwards from the
+	// relay to the local API server. A request carrying this exact value
+	// is therefore known to have arrived via the relay tunnel (remote) and
+	// MUST NOT inherit LAN-bypass — even though it lands on a loopback host.
+	// Empty disables tunnel detection (pure-LAN deployments with no relay).
+	TunnelMarker string
+
 	// ownerAccess is the lazy-initialised ceremony + session map. Built
 	// on first request via Server.ownerAccess().
 	ownerAccess *ownerAccessState

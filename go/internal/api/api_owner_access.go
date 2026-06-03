@@ -23,6 +23,7 @@ package api
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -212,7 +213,11 @@ func (oa *ownerAccessState) gcAuths() {
 // cookie; honours LAN-bypass when Deps.OwnerAccessLANBypass is true and
 // the request came from a loopback address.
 func (s *Server) authorizeOwner(r *http.Request) (credentialID []byte, ok bool) {
-	if s.deps.OwnerAccessLANBypass && isLoopback(r) {
+	// LAN-bypass applies to genuinely-local requests only. A relay-tunnelled
+	// request also lands on a loopback host (the long-poll reverse-proxy
+	// connects from 127.0.0.1), so loopback alone is NOT proof of locality —
+	// the unforgeable tunnel marker is what distinguishes them.
+	if s.deps.OwnerAccessLANBypass && !s.isTunneled(r) {
 		return []byte("lan-bypass"), true
 	}
 	c, err := r.Cookie(ownerAccessCookieName)
@@ -239,6 +244,20 @@ func isLoopback(r *http.Request) bool {
 		host = host[:i]
 	}
 	return host == "127.0.0.1" || host == "localhost" || host == "[::1]" || host == "::1"
+}
+
+// isTunneled reports whether the request arrived via the relay long-poll
+// reverse-proxy, which stamps every forwarded request with the per-process
+// TunnelMarker secret. Constant-time compare so a direct client cannot probe
+// for the secret. A direct client that guesses wrong is simply treated as a
+// normal (trusted) LAN client — never an escalation.
+func (s *Server) isTunneled(r *http.Request) bool {
+	m := s.deps.TunnelMarker
+	if m == "" {
+		return false
+	}
+	got := r.Header.Get("X-FTW-Tunnel")
+	return subtle.ConstantTimeCompare([]byte(got), []byte(m)) == 1
 }
 
 func (s *Server) issueOwnerSession(w http.ResponseWriter, credentialID []byte) error {
