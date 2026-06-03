@@ -1,7 +1,7 @@
 # Home Route — Phase 5: P2P Transport — Design
 
 - **Date:** 2026-06-03
-- **Status:** Design approved (brainstorm). **Implementation deferred.** Phase 5 can only be *fully* verified with a real browser + live network (ICE/STUN/DTLS); the design below isolates the part that IS verifiable in Go from the part that needs a browser harness.
+- **Status:** Design approved. **Step 1 (verifiable-in-Go core) BUILT** on `home-route-phase5` — `go/internal/p2p` (`Bridge` + `NewPeer`, `pion/webrtc/v4`) with passing pion↔pion DataChannel loopback tests (`p2p_test.go`). **Remainder deferred** (relay signaling, browser `p2pClient`, STUN/TURN) — those can only be *fully* verified with a real browser + live network (ICE/STUN/DTLS). The design below isolates the part that IS verifiable in Go from the part that needs a browser harness.
 - **Builds on:** Phases 1–3 (`home-route-phase1`), master spec §10.
 
 ## One-liner
