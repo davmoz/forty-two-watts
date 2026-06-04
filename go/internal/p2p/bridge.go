@@ -50,26 +50,41 @@ type ResponseFrame struct {
 // same channel. The DataChannel is DTLS-encrypted end to end, so the data
 // plane is ciphertext even over a TURN relay, which closes the "cloud sees
 // plaintext" gap for everything routed over P2P.
+// maxInflight bounds concurrent handler execution on one DataChannel so a busy
+// or hostile peer can't fan out unbounded goroutines on the Pi.
+const maxInflight = 16
+
+// tunnelMarkerHeader is the canonicalised X-FTW-Tunnel header. A client must
+// never be able to supply it — only the trusted offer-time auth context may.
+const tunnelMarkerHeader = "X-Ftw-Tunnel"
+
 type Bridge struct {
 	handler http.Handler
 	dc      *webrtc.DataChannel
+	auth    http.Header   // trusted offer-time auth context, stamped on each replay
 	log     *slog.Logger
+	sem     chan struct{} // caps concurrent in-flight replays
 }
 
-// NewBridge attaches a Bridge to an open DataChannel and the local handler,
-// registering the message pump immediately. A nil log defaults to
-// slog.Default(). The caller owns the DataChannel and PeerConnection lifecycle.
-func NewBridge(dc *webrtc.DataChannel, handler http.Handler, log *slog.Logger) *Bridge {
+// NewBridge attaches a Bridge to an open DataChannel, the local handler (the
+// GATED api.Server handler), and the trusted offer-time auth context to stamp
+// on every replayed request. A nil log defaults to slog.Default(). The caller
+// owns the DataChannel and PeerConnection lifecycle.
+func NewBridge(dc *webrtc.DataChannel, handler http.Handler, auth http.Header, log *slog.Logger) *Bridge {
 	if log == nil {
 		log = slog.Default()
 	}
-	b := &Bridge{handler: handler, dc: dc, log: log}
+	b := &Bridge{handler: handler, dc: dc, auth: auth, log: log, sem: make(chan struct{}, maxInflight)}
 	dc.OnMessage(func(msg webrtc.DataChannelMessage) {
 		// Replay off the pion read loop so a slow handler can't
-		// head-of-line-block other requests on the channel. dc.Send is
-		// safe for concurrent use, and each ResponseFrame carries the
-		// ReqID, so out-of-order completion is fine.
-		go b.serve(msg.Data)
+		// head-of-line-block, but bound concurrency: acquiring the semaphore
+		// here applies natural backpressure once maxInflight replays run. Each
+		// ResponseFrame carries the ReqID, so out-of-order completion is fine.
+		b.sem <- struct{}{}
+		go func(data []byte) {
+			defer func() { <-b.sem }()
+			b.serve(data)
+		}(msg.Data)
 	})
 	return b
 }
@@ -114,13 +129,22 @@ func (b *Bridge) replay(req tunnel.TunneledRequest) tunnel.TunneledResponse {
 		body = bytes.NewReader(req.Body)
 	}
 	hr := httptest.NewRequest(method, path, body)
-	// Forward headers verbatim — the owner cookie / tunnel marker ride along
-	// so a DataChannel-delivered request hits the same auth-gate as the relay
-	// path (Phase 5 risk: "auth on the P2P path").
+	// Client-supplied headers first — but never honour a client-supplied tunnel
+	// marker: that header is the relay's remote-vs-LAN trust signal, and only
+	// the trusted offer-time auth context (b.auth) may set it.
 	for k, vs := range req.Header {
+		if http.CanonicalHeaderKey(k) == tunnelMarkerHeader {
+			continue
+		}
 		for _, v := range vs {
 			hr.Header.Add(k, v)
 		}
+	}
+	// Then stamp the trusted auth context authoritatively (overwriting any
+	// client value) so the replayed request carries the owner's real trust tier
+	// — the same the relay path grants, never a forged local console.
+	for k, vs := range b.auth {
+		hr.Header[http.CanonicalHeaderKey(k)] = append([]string(nil), vs...)
 	}
 	rec := httptest.NewRecorder()
 	b.handler.ServeHTTP(rec, hr)

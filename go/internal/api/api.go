@@ -34,6 +34,7 @@ import (
 	"github.com/frahlg/forty-two-watts/go/internal/loadpoint"
 	"github.com/frahlg/forty-two-watts/go/internal/mpc"
 	"github.com/frahlg/forty-two-watts/go/internal/notifications"
+	"github.com/frahlg/forty-two-watts/go/internal/p2p"
 	"github.com/frahlg/forty-two-watts/go/internal/prices"
 	"github.com/frahlg/forty-two-watts/go/internal/pvmodel"
 	"github.com/frahlg/forty-two-watts/go/internal/scanner"
@@ -183,6 +184,12 @@ type Deps struct {
 	// identity load failed; the /api/identity endpoint then returns 503.
 	SiteIdentityPubHex string
 
+	// P2P is the Pi-side WebRTC manager (Phase 5). It answers browser SDP
+	// offers (POST /api/p2p/offer) and serves the resulting direct DataChannel
+	// with a p2p.Bridge over the ungated API mux (injected via SetLocalAPI in
+	// main.go after New). Nil is safe — the offer endpoint returns 503.
+	P2P *p2p.Manager
+
 	// ownerAccess is the lazy-initialised ceremony + session map. Built
 	// on first request via Server.ownerAccess().
 	ownerAccess *ownerAccessState
@@ -252,6 +259,7 @@ func (s *Server) routes() {
 	s.handle("GET  /api/health", s.handleHealth)
 	s.handle("GET  /api/status", s.handleStatus)
 	s.handle("GET  /api/system/info", s.handleSysInfo)
+	s.handle("POST /api/p2p/offer", s.handleP2POffer)
 	s.handle("GET  /api/config", s.handleGetConfig)
 	s.handle("POST /api/config", s.handlePostConfig)
 	s.handle("POST /api/drivers/verify_tesla", s.handleVerifyTesla)

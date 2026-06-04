@@ -41,7 +41,7 @@ func TestBridge_PionToPion(t *testing.T) {
 
 	// Pi side: when the "ftw" channel arrives, serve it with a Bridge.
 	pcB.OnDataChannel(func(dc *webrtc.DataChannel) {
-		NewBridge(dc, handler, nil)
+		NewBridge(dc, handler, nil, nil)
 	})
 
 	// Browser side: open the channel; on open, send one TunneledRequest.
@@ -110,7 +110,7 @@ func TestBridge_NotFoundPropagates(t *testing.T) {
 	defer pcB.Close()
 
 	pcB.OnDataChannel(func(dc *webrtc.DataChannel) {
-		NewBridge(dc, http.NewServeMux(), nil) // empty mux => 404 everywhere
+		NewBridge(dc, http.NewServeMux(), nil, nil) // empty mux => 404 everywhere
 	})
 
 	respCh := make(chan ResponseFrame, 1)
@@ -173,4 +173,39 @@ func connectPeers(a, b *webrtc.PeerConnection) error {
 	}
 	<-gatherB
 	return a.SetRemoteDescription(*b.LocalDescription())
+}
+
+// TestBridge_replay_AuthContext verifies the security boundary: the Bridge
+// stamps the trusted offer-time auth context (X-FTW-Tunnel + Cookie) on every
+// replayed request, overriding any client-forged values, while passing benign
+// client headers through. This is what stops a DataChannel request from forging
+// the remote-vs-LAN trust signal or swapping in a different owner session.
+func TestBridge_replay_AuthContext(t *testing.T) {
+	var seen http.Header
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	})
+	auth := http.Header{}
+	auth.Set("X-FTW-Tunnel", "real-marker")
+	auth.Set("Cookie", "ftw_owner=sess1")
+	b := &Bridge{handler: h, auth: auth}
+
+	req := tunnel.TunneledRequest{Method: http.MethodGet, Path: "/api/x"}
+	req.Header = http.Header{}
+	req.Header.Set("X-FTW-Tunnel", "forged")       // client forgery attempt
+	req.Header.Set("Cookie", "ftw_owner=attacker") // client session-swap attempt
+	req.Header.Set("Accept", "application/json")   // benign, should pass through
+
+	b.replay(req)
+
+	if got := seen.Get("X-Ftw-Tunnel"); got != "real-marker" {
+		t.Errorf("X-Ftw-Tunnel = %q, want \"real-marker\" (client forgery must be overridden)", got)
+	}
+	if got := seen.Get("Cookie"); got != "ftw_owner=sess1" {
+		t.Errorf("Cookie = %q, want the offer-time cookie, not the client's", got)
+	}
+	if got := seen.Get("Accept"); got != "application/json" {
+		t.Errorf("Accept = %q, want the benign client header preserved", got)
+	}
 }

@@ -41,6 +41,7 @@ import (
 	"github.com/frahlg/forty-two-watts/go/internal/notifications"
 	"github.com/frahlg/forty-two-watts/go/internal/nova"
 	"github.com/frahlg/forty-two-watts/go/internal/ocpp"
+	"github.com/frahlg/forty-two-watts/go/internal/p2p"
 	"github.com/frahlg/forty-two-watts/go/internal/priceforecast"
 	"github.com/frahlg/forty-two-watts/go/internal/prices"
 	"github.com/frahlg/forty-two-watts/go/internal/proxy"
@@ -1452,6 +1453,14 @@ func main() {
 		slog.Info("site identity ready", "pubkey_prefix", siteIdentityPubHex[:16])
 	}
 
+	// Browser P2P (Phase 5): the manager answers WebRTC SDP offers
+	// (POST /api/p2p/offer) and serves the resulting direct DataChannel with a
+	// p2p.Bridge over the ungated API mux. Signaling rides the authenticated
+	// owner tunnel — no relay changes. The local-API handler is injected after
+	// api.New (srv.Mux()) since srv does not exist yet at this point.
+	p2pMgr := p2p.NewManager(slog.Default(), p2p.DefaultSTUNServers)
+	defer p2pMgr.Close()
+
 	deps = &api.Deps{
 		Tel: tel, LogRing: logRing, Ctrl: ctrl, CtrlMu: ctrlMu,
 		State: st,
@@ -1496,6 +1505,7 @@ func main() {
 		OwnerAccessLANBypass: envBoolDefault("FTW_OWNER_ACCESS_LAN_BYPASS", true),
 		TunnelMarker:         tunnelMarker,
 		SiteIdentityPubHex:   siteIdentityPubHex,
+		P2P:                  p2pMgr,
 
 		Restart: func(reqCtx context.Context) error {
 			// Prefer the docker-compose sidecar path when wired up: the
@@ -1524,6 +1534,11 @@ func main() {
 		Version: Version,
 	}
 	srv := api.New(deps)
+	// Wire the P2P bridge to the GATED API handler now that srv exists. The
+	// Bridge stamps each replayed request with the offer's auth context, so the
+	// gate authorizes them at the owner's real trust tier (remote over the
+	// relay, local on the LAN) — not an unconditional bypass.
+	p2pMgr.SetLocalAPI(srv.Handler())
 	// Dev-mode proxy: when FTW_PROXY_UPSTREAM is set (e.g.
 	// http://192.168.1.139:8080), /api/* is forwarded to that instance so
 	// the local UI renders live data without owning the control loop.
