@@ -60,6 +60,13 @@
   function enabled() {
     // Opt-in defaults ON (the feature's whole point); set localStorage
     // "ftw.p2p" = "off" to force the relay path.
+    //
+    // Only engage on the remote relay path (apiBase() is the "/me/<site>"
+    // prefix). On a direct LAN / home-host visit apiBase() is "" — we're
+    // already connected straight to the Pi, so a WebRTC DataChannel buys
+    // nothing and the STUN handshake (needs WAN) would stall the first
+    // status poll ~8s before falling back. Fall straight through to fetch.
+    if (apiBase() === "") return false;
     return supported() && localStorage.getItem("ftw.p2p") !== "off";
   }
 
@@ -245,6 +252,11 @@
   // direct (and the indicator settles quickly). When P2P is supported but
   // opted out, still surface a "relay" state so the indicator stays clickable
   // to re-enable; only an unsupported browser leaves the state "off" (hidden).
-  if (enabled()) { try { connect(); } catch (e) {} }
+  //
+  // On a direct LAN / home-host visit (apiBase() === "") P2P is not applicable
+  // at all — there's no relay to bypass — so we stay "off" (indicator hidden)
+  // rather than showing a misleading, un-toggleable "Relay" badge.
+  if (apiBase() === "") { /* not applicable on the direct path — stay "off" */ }
+  else if (enabled()) { try { connect(); } catch (e) {} }
   else if (supported()) { setState("relay"); }
 })();
