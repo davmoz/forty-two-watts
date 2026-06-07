@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.120.2
+
+### Patch Changes
+
+- Fix Remote Access first-passkey setup so official installs use the public relay
+  after opt-in, only show a setup QR once the relay has accepted the live
+  invitation, and surface clearer Safari/passkey setup errors.
+
 ## 0.120.1
 
 ### Patch Changes

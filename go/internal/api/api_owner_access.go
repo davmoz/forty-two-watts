@@ -37,6 +37,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -635,6 +636,21 @@ func (s *Server) handleOwnerEnrollPin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "enrollment PIN is only available on the local network", http.StatusForbidden)
 		return
 	}
+	if !s.remoteAccessEnabled() {
+		http.Error(w, "remote access is off; enable it in Settings -> Access, save, and restart before creating a setup link", http.StatusConflict)
+		return
+	}
+	if strings.TrimSpace(s.deps.RelayBaseURL) == "" {
+		http.Error(w, "remote access needs a service restart before setup links can be created", http.StatusConflict)
+		return
+	}
+	if devices, err := s.deps.State.LoadTrustedDevices(); err != nil {
+		http.Error(w, fmt.Sprintf("check trusted devices: %v", err), http.StatusInternalServerError)
+		return
+	} else if len(devices) > 0 {
+		http.Error(w, "a passkey is already enrolled; sign in and add more passkeys from Access instead of using the first-setup QR", http.StatusConflict)
+		return
+	}
 	pin, bootstrapID, expiresIn, err := s.ownerAccess().mintEnrollPin()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -644,20 +660,31 @@ func (s *Server) handleOwnerEnrollPin(w http.ResponseWriter, r *http.Request) {
 	// in logs; it travels only in this response to the LAN browser.
 	slog.Info("owner-access enrollment PIN minted",
 		"pin", pin, "expires_in_s", expiresIn)
-	// Self-publish the signed descriptor to the relay so a fresh browser holding
-	// this bootstrap_id can claim it and enroll its first passkey (multi-tenant
-	// onboarding, Task 5). The relay keys its store on hex(sha256(bootstrap_id)) —
-	// the raw value never leaves the Pi except in this LAN response. Best-effort +
-	// off the response path: publishBootstrapDescriptor is a no-op when no relay is
-	// wired or any device is already enrolled, so the response never waits on (or
-	// fails because of) the relay.
-	go s.publishBootstrapDescriptor(bootstrapID)
+	// Publish before returning the QR/link. If the browser opens the setup link
+	// immediately (same Safari profile / new tab is very fast), a background PUT
+	// races and produces a false "no live setup link". Setup is only useful once
+	// the relay has accepted the parked descriptor, so surface publish failure here.
+	if err := s.publishBootstrapDescriptor(bootstrapID); err != nil {
+		http.Error(w, "setup link unavailable: "+err.Error(), http.StatusBadGateway)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"pin":          pin,
 		"bootstrap_id": bootstrapID,
 		"expires_in_s": expiresIn,
 	})
+}
+
+func (s *Server) remoteAccessEnabled() bool {
+	if s == nil || s.deps == nil || s.deps.Cfg == nil {
+		return false
+	}
+	if s.deps.CfgMu != nil {
+		s.deps.CfgMu.RLock()
+		defer s.deps.CfgMu.RUnlock()
+	}
+	return s.deps.Cfg.RemoteAccessEnabled()
 }
 
 func (s *Server) handleOwnerEnrollStart(w http.ResponseWriter, r *http.Request) {

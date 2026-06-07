@@ -57,13 +57,15 @@ stranger can be involved.
 
 1. At home, open your box's dashboard the way you normally do (e.g.
    `http://forty-two-watts.local` or its IP address).
-2. Find **Set up remote access**. Your box shows a **QR code**, a one-tap
-   **link**, and a **6-digit PIN**.
-3. Either **scan the QR with your phone** or **tap the link** — it opens
+2. Open **Settings -> Access**, enable **Remote Access**, save, and restart if
+   the dashboard asks for it.
+3. Return to the local Access screen and find **Set up remote access**. Your box
+   shows a **QR code**, a one-tap **link**, and a **6-digit PIN**.
+4. Either **scan the QR with your phone** or **tap the link** — it opens
    `home.fortytwowatts.com` and brings the box's signed identity along with it
    (carried in the part of the link after the `#`, which never leaves your
    browser and never reaches the relay).
-4. The page asks for the **6-digit PIN** shown on your box, then offers to
+5. The page asks for the **6-digit PIN** shown on your box, then offers to
    **create a passkey** (Face ID / Touch ID / a fingerprint / a security key).
    Confirm.
 
@@ -82,6 +84,11 @@ knows which box is yours.
 > before it does any work, so two attempts can never both enroll, and once one
 > device is in, the window is closed even if a reply got lost. It also expires in
 > ten minutes; finishing enrollment (or the timer) closes the window.
+
+> **If the setup link says it is no longer live**, go back to your local Access
+> screen and create a fresh setup QR. If one passkey already exists, the first
+> bootstrap is intentionally closed; sign in and manage additional passkeys from
+> **Settings -> Access** instead.
 
 > **Tip:** enroll on each device you'll actually use — your phone *and* your
 > laptop, say. Each gets its own passkey. You can add or remove them any time

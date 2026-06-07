@@ -5,16 +5,32 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/frahlg/forty-two-watts/go/internal/config"
 )
 
 // The LAN PIN is the bridge that lets the owner enroll the FIRST passkey at
 // the relay.fortytwowatts.com origin (required for the relay RP-ID) while
 // proving LAN presence via a code only a local user can read.
 
-// enroll-pin must return 200 + a 6-digit pin on a genuine (non-tunnelled) LAN
-// request, and 403 on a relay-tunnelled (marked) request.
-func TestEnrollPinLANvsTunnel(t *testing.T) {
+func minEnrollPinDeps(t *testing.T) (*Deps, *fakeBootstrapRelay) {
+	t.Helper()
 	d := minDeps(t)
+	d.Cfg.RemoteAccess = &config.RemoteAccess{Enabled: true}
+	signer := newFakeInstanceSigner(t)
+	d.InstanceSigner = signer
+	d.SiteIdentityPubHex = signer.PublicKeyHex()
+	d.SiteID = "site:test-site"
+	fr, relaySrv := newFakeBootstrapRelay(t)
+	d.RelayBaseURL = relaySrv.URL
+	return d, fr
+}
+
+// enroll-pin must return 200 + a 6-digit pin on a genuine (non-tunnelled) LAN
+// request after Remote Access is opted in, and 403 on a relay-tunnelled
+// (marked) request.
+func TestEnrollPinLANvsTunnel(t *testing.T) {
+	d, fr := minEnrollPinDeps(t)
 	d.OwnerAccessLANBypass = true
 	d.TunnelMarker = "marker"
 	srv := New(d)
@@ -57,6 +73,12 @@ func TestEnrollPinLANvsTunnel(t *testing.T) {
 	if len(bid) < 32 {
 		t.Fatalf("bootstrap_id must be >=32 bytes of entropy, got %d", len(bid))
 	}
+	fr.mu.Lock()
+	gotPut := fr.gotPut
+	fr.mu.Unlock()
+	if !gotPut {
+		t.Fatalf("enroll-pin returned before parking the setup descriptor on the relay")
+	}
 
 	// Relay-tunnelled (marked) → 403, never hand out the PIN over the tunnel.
 	req2 := httptest.NewRequest("GET", "/api/owner-access/enroll-pin", nil)
@@ -89,9 +111,41 @@ func mintEnrollPin(t *testing.T, srv *Server) string {
 	return out.Pin
 }
 
+func TestOwnerEnrollPinRequiresRemoteAccessOptIn(t *testing.T) {
+	d := minDeps(t)
+	d.OwnerAccessLANBypass = true
+	d.TunnelMarker = "marker"
+	srv := New(d)
+	req := httptest.NewRequest("GET", "/api/owner-access/enroll-pin", nil)
+	req.Host = "127.0.0.1:8080"
+	req.RemoteAddr = "192.168.1.50:1234"
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != 409 {
+		t.Fatalf("remote-off enroll-pin should be 409, got %d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestOwnerEnrollPinRequiresRestartAfterOptIn(t *testing.T) {
+	d := minDeps(t)
+	d.Cfg.RemoteAccess = &config.RemoteAccess{Enabled: true}
+	d.OwnerAccessLANBypass = true
+	d.TunnelMarker = "marker"
+	d.RelayBaseURL = "" // cfg was hot-toggled, but service has not restarted.
+	srv := New(d)
+	req := httptest.NewRequest("GET", "/api/owner-access/enroll-pin", nil)
+	req.Host = "127.0.0.1:8080"
+	req.RemoteAddr = "192.168.1.50:1234"
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != 409 {
+		t.Fatalf("restart-needed enroll-pin should be 409, got %d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
 // A tunnelled bootstrap enroll/start WITHOUT a pin must be 403.
 func TestEnrollPinTunnelBootstrapWithoutPin(t *testing.T) {
-	d := minDeps(t)
+	d, _ := minEnrollPinDeps(t)
 	d.OwnerAccessLANBypass = true
 	d.TunnelMarker = "marker"
 	srv := New(d)
@@ -108,7 +162,7 @@ func TestEnrollPinTunnelBootstrapWithoutPin(t *testing.T) {
 // A tunnelled bootstrap enroll/start WITH the correct minted pin must succeed
 // (ceremony begins → ceremony_token present).
 func TestEnrollPinTunnelBootstrapWithPin(t *testing.T) {
-	d := minDeps(t)
+	d, _ := minEnrollPinDeps(t)
 	d.OwnerAccessLANBypass = true
 	d.TunnelMarker = "marker"
 	srv := New(d)
@@ -130,7 +184,7 @@ func TestEnrollPinTunnelBootstrapWithPin(t *testing.T) {
 
 // A tunnelled bootstrap enroll/start with a WRONG pin must be 403.
 func TestEnrollPinTunnelBootstrapWrongPin(t *testing.T) {
-	d := minDeps(t)
+	d, _ := minEnrollPinDeps(t)
 	d.OwnerAccessLANBypass = true
 	d.TunnelMarker = "marker"
 	srv := New(d)
@@ -154,7 +208,7 @@ func TestEnrollPinTunnelBootstrapWrongPin(t *testing.T) {
 // genuine private-range LAN source, which loopback (the relay/sidecar proxy) is
 // not. This is what stops a "friend" from hijacking owner enrollment.
 func TestOwnerAccessBootstrapRefusedFromLoopbackProxy(t *testing.T) {
-	d := minDeps(t)
+	d, _ := minEnrollPinDeps(t)
 	d.OwnerAccessLANBypass = true
 	d.TunnelMarker = "marker"
 	srv := New(d)
@@ -172,7 +226,7 @@ func TestOwnerAccessBootstrapRefusedFromLoopbackProxy(t *testing.T) {
 // The matching guard for the PIN: a loopback-proxy (friend-flow) request must
 // not be able to mint the enrollment PIN either.
 func TestOwnerEnrollPinRefusedFromLoopbackProxy(t *testing.T) {
-	d := minDeps(t)
+	d, _ := minEnrollPinDeps(t)
 	d.OwnerAccessLANBypass = true
 	d.TunnelMarker = "marker"
 	srv := New(d)
@@ -189,7 +243,7 @@ func TestOwnerEnrollPinRefusedFromLoopbackProxy(t *testing.T) {
 // LAN (unmarked) bootstrap enroll/start still works without any pin — the PIN
 // requirement is only for the internet-exposed tunnel path.
 func TestEnrollPinLANBootstrapNoPinStillWorks(t *testing.T) {
-	d := minDeps(t)
+	d, _ := minEnrollPinDeps(t)
 	d.OwnerAccessLANBypass = true
 	d.TunnelMarker = "marker"
 	srv := New(d)

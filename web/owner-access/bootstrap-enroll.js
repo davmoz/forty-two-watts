@@ -107,7 +107,9 @@ export async function claimAndVerify(homeBase, claimKey, fetchImpl) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ claim_key: claimKey }),
   });
-  if (r.status === 404) throw new Error("no live setup link — the PIN/QR may have expired; mint a fresh one on your home network");
+  if (r.status === 404) {
+    throw new Error("This setup link is no longer live. Create a fresh setup QR from your local 42W Access screen. If a passkey was already enrolled, sign in first; the first setup link is single-use.");
+  }
   if (!r.ok) throw new Error("claim failed (" + r.status + ")");
   const { site_id, descriptor } = await r.json();
   if (!site_id || !descriptor) throw new Error("relay returned an incomplete claim");

@@ -119,9 +119,10 @@ touching power math.
 ## Remote Access
 
 Remote access is opt-in and still keeps the home site local-first. Enable it
-from the local dashboard under **Settings -> Access**. The Pi then registers an
-opaque, high-entropy `site_id` with the public relay and publishes only the
-minimal information needed for a browser to find that Pi.
+from the local dashboard under **Settings -> Access**, save, and restart when
+prompted. The Pi then registers an opaque, high-entropy `site_id` with the
+public relay and publishes only the minimal information needed for a browser to
+find that Pi.
 
 The public `home.fortytwowatts.com` route works in three layers:
 
@@ -137,6 +138,11 @@ store the dashboard app bundle, does not terminate owner sessions, does not
 receive `ftw_owner` cookies, and does not inspect passkeys or owner data.
 Passkeys, remembered browser keys, and active sessions are managed locally in
 the Access tab, where they can also be revoked.
+
+First setup is a one-time bootstrap: the local Access screen shows a QR/link and
+PIN only before the first passkey exists, and only after the relay has accepted
+the live setup invitation. After one passkey is enrolled, add or revoke access
+from **Settings -> Access** while signed in.
 
 Relay operators should install the relay bootstrap bundle from each release,
 not copy the Pi dashboard `web/` directory to the relay. Deployment details:

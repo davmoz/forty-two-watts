@@ -29,6 +29,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -67,43 +69,50 @@ func bootstrapPublishSigningString(siteID, claimKey string, tsMs int64, descript
 // never wedges the goroutine that handleOwnerEnrollPin fired.
 const bootstrapPublishTimeout = 10 * time.Second
 
+var (
+	errBootstrapRelayUnavailable = errors.New("remote relay is not configured")
+	errBootstrapWindowClosed     = errors.New("first setup window is closed")
+)
+
 // publishBootstrapDescriptor parks this Pi's signed instance descriptor under its
 // site on the relay so a fresh browser holding the freshly-minted bootstrap_id can
 // claim it and enroll its first passkey. The relay keys the store on
 // claimKey = hex(sha256(bootstrap_id)); the RAW bootstrap_id never leaves the Pi
 // (it goes only to the LAN browser, which derives the same claimKey from the URL
-// fragment). Best-effort and NON-BLOCKING by design: every failure path logs and
-// returns; it never errors back to the PIN response.
+// fragment). The LAN setup endpoint calls this synchronously: a setup QR is only
+// shown after the relay has accepted the descriptor, otherwise the user gets an
+// actionable setup-link error instead of a dead invitation.
 //
 // It self-gates to the zero-device first-enrollment window: if ANY trusted device
-// is already enrolled, the bootstrap window is closed and we publish nothing
-// (re-publishing then would re-open an internet-claimable window for an already
-// owned Pi). It also no-ops when no relay is wired (LAN-only deploy) or no signer
-// is available (identity load failed on boot).
-func (s *Server) publishBootstrapDescriptor(bootstrapID string) {
+// is already enrolled, the bootstrap window is closed and publish returns an
+// error (re-publishing then would re-open an internet-claimable window for an
+// already owned Pi). It also errors when no relay is wired or no signer is
+// available. The LAN setup endpoint waits for this call before showing the QR so
+// the browser cannot race the relay publish and see a false "no live setup link".
+func (s *Server) publishBootstrapDescriptor(bootstrapID string) error {
 	relayBase := strings.TrimRight(s.deps.RelayBaseURL, "/")
 	if relayBase == "" {
-		return // LAN-only: no relay to publish to.
+		return errBootstrapRelayUnavailable
 	}
 	if s.deps.State == nil || s.deps.InstanceSigner == nil {
-		return
+		return errBootstrapRelayUnavailable
 	}
 	// Zero-device window only. Grep-mirror of enrollAllowed's LoadTrustedDevices
 	// bootstrap gate: once a passkey exists the window is closed.
 	devices, err := s.deps.State.LoadTrustedDevices()
 	if err != nil {
 		slog.Warn("bootstrap-publish: load trusted devices", "err", err)
-		return
+		return fmt.Errorf("load trusted devices: %w", err)
 	}
 	if len(devices) > 0 {
-		return // window closed — a device is already enrolled.
+		return errBootstrapWindowClosed
 	}
 
 	siteID := s.deps.SiteID
 	descJSON, err := s.buildInstanceDescriptor()
 	if err != nil {
 		slog.Warn("bootstrap-publish: build descriptor", "site_id", siteID, "err", err)
-		return
+		return fmt.Errorf("build descriptor: %w", err)
 	}
 
 	// claim_key is the relay store key: hex(sha256(bootstrap_id)). The relay never
@@ -120,7 +129,7 @@ func (s *Server) publishBootstrapDescriptor(bootstrapID string) {
 	sigHex, err := s.deps.InstanceSigner.SignRawHex(bootstrapPublishSigningString(siteID, claimKey, tsMs, descJSON))
 	if err != nil {
 		slog.Warn("bootstrap-publish: sign publish", "site_id", siteID, "err", err)
-		return
+		return fmt.Errorf("sign publish: %w", err)
 	}
 
 	body, err := json.Marshal(bootstrapPublishIO{
@@ -131,7 +140,7 @@ func (s *Server) publishBootstrapDescriptor(bootstrapID string) {
 	})
 	if err != nil {
 		slog.Warn("bootstrap-publish: marshal body", "err", err)
-		return
+		return fmt.Errorf("marshal publish body: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), bootstrapPublishTimeout)
@@ -140,18 +149,19 @@ func (s *Server) publishBootstrapDescriptor(bootstrapID string) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(body))
 	if err != nil {
 		slog.Warn("bootstrap-publish: build request", "err", err)
-		return
+		return fmt.Errorf("build publish request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		slog.Warn("bootstrap-publish: PUT to relay", "url", url, "err", err)
-		return
+		return fmt.Errorf("publish to relay: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		slog.Warn("bootstrap-publish: relay rejected", "status", resp.StatusCode, "site_id", siteID)
-		return
+		return fmt.Errorf("relay rejected setup publish: %d", resp.StatusCode)
 	}
 	slog.Info("bootstrap-publish: descriptor parked on relay", "site_id", siteID)
+	return nil
 }

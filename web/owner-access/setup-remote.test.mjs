@@ -85,6 +85,8 @@ test("setup-remote.js renders a QR, a clickable link, the PIN, and a live countd
   assert.match(SRC, /pin-digits/, "must render the PIN digits");
   assert.match(SRC, /setInterval\(tick, 1000\)/, "countdown ticks once per second");
   assert.match(SRC, /clipboard\.writeText/, "PIN is copyable");
+  assert.match(SRC, /execCommand\("copy"\)/, "copy has an insecure-LAN/Safari fallback");
+  assert.match(SRC, /Select PIN/, "copy failure selects the visible PIN instead of dead-ending");
   assert.match(SRC, /mint a fresh link/i, "expired state re-mints");
 });
 

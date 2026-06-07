@@ -167,7 +167,7 @@ type Deps struct {
 
 	// OwnerAccessRPID is the WebAuthn Relying Party ID for owner-access
 	// passkeys. Must match the hostname the browser sees. Defaults to
-	// "relay.fortytwowatts.com"; override to "localhost" for local dev.
+	// "home.fortytwowatts.com"; override to "localhost" for local dev.
 	OwnerAccessRPID string
 
 	// OwnerAccessOrigins is the list of permitted browser origins for
@@ -204,10 +204,11 @@ type Deps struct {
 	SiteID string
 
 	// RelayBaseURL is the base URL of the owner-access relay this Pi registers
-	// with (FTW_RELAY_URL in main.go). Used to self-publish the signed instance
-	// descriptor to PUT {RelayBaseURL}/bootstrap/{site_id} during the brief
-	// first-enrollment window (see bootstrap_publish.go). Empty on LAN-only
-	// deploys (no relay wired) — the self-publish is then a no-op.
+	// with. main.go defaults it to the official relay after remote_access opt-in
+	// and lets FTW_RELAY_URL override it for self-hosted/dev relays. Used to
+	// self-publish the signed instance descriptor to PUT
+	// {RelayBaseURL}/bootstrap/{site_id} during the brief first-enrollment window
+	// (see bootstrap_publish.go). Empty means setup links cannot be published.
 	RelayBaseURL string
 
 	// InstanceSigner is the Pi's self-sovereign ES256 identity used to sign the

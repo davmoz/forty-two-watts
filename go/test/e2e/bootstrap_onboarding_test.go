@@ -61,8 +61,8 @@ import (
 //     the relay yield EXACTLY one 200 and one 403 — the loser loses the test-and-set
 //     reservation before its enroll ever reaches the Pi.
 //   - PI ZERO-DEVICE RECHECK (source-of-truth backstop for the BLOCKER): once a
-//     device exists, a tunneled finish is refused 403 by the Pi's finish-time
-//     LoadTrustedDevices recheck even with a correct proof.
+//     device exists, the Pi refuses to mint another first-setup QR/PIN; the
+//     lower finish-time LoadTrustedDevices recheck remains covered in API tests.
 //   - C2 fail-closed (unchanged): a no-claim_key forward is refused at the relay
 //     (403); a claim_key-but-no-PIN forward is refused at the Pi.
 //
@@ -70,7 +70,7 @@ import (
 //   - mintEnrollPin requires a genuine PRIVATE-RANGE LAN source (isLANClientSource
 //     rejects loopback). We therefore drive the PIN-mint over the in-process handler
 //     with a spoofed private-range RemoteAddr — that is the real Pi code path,
-//     including the goroutine self-publish to the relay. This keeps the test
+//     including the synchronous self-publish to the relay. This keeps the test
 //     deterministic in CI (no dependency on a real LAN interface, which `make verify`
 //     runs without -short would otherwise make flaky).
 //   - The production enroll-forward HOST that drains the relay queue and stamps
@@ -137,6 +137,7 @@ func TestBootstrapOnboardingThroughRelay(t *testing.T) {
 	defer st.Close()
 	cfg := &config.Config{}
 	cfg.Site.Name = siteName
+	cfg.RemoteAccess = &config.RemoteAccess{Enabled: true}
 	var capMu, cfgMu sync.RWMutex
 	var ctrlMu sync.Mutex
 	deps := &api.Deps{
@@ -214,7 +215,8 @@ func TestBootstrapOnboardingThroughRelay(t *testing.T) {
 	}
 
 	// ---- 2. Claim the Pi's self-published descriptor through the relay ----
-	// The self-publish is a goroutine fired by enroll-pin; poll the relay claim.
+	// The self-publish completed before enroll-pin returned; claim the descriptor
+	// through the relay just like the browser does.
 	var descJSON []byte
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
@@ -431,9 +433,8 @@ func TestBootstrapOnboardingThroughRelay(t *testing.T) {
 		// Document which fail-closed layer caught the loser. The relay's Reserve
 		// test-and-set is the primary guard ("no live bootstrap for this claim_key");
 		// the Pi's finish-time zero-device recheck is the source-of-truth backstop
-		// ("enrollment window closed"). Either is a valid 403 — both are exercised by
-		// this suite (the Pi recheck explicitly in step 9) — so we only LOG which one
-		// fired here rather than over-constrain a legitimately-racing outcome.
+		// ("enrollment window closed"). Either is a valid 403, so we only LOG which
+		// one fired here rather than over-constrain a legitimately-racing outcome.
 		t.Logf("concurrent double-finish loser 403 body=%q (relay reservation or Pi recheck — both fail-closed)", strings.TrimSpace(loserBody))
 		// HAPPY PATH proof: the single 200 was a genuine software-attested enroll —
 		// a trusted device must now exist on the real Pi.
@@ -446,48 +447,26 @@ func TestBootstrapOnboardingThroughRelay(t *testing.T) {
 		}
 	}
 
-	// ---- 9. PI ZERO-DEVICE RECHECK (source-of-truth backstop) ----
-	// A device now exists, and the relay BURNED the bootstrap on the winning finish
-	// (so it can no longer forward, and the Pi refuses to re-publish while a device
-	// is enrolled — the window is structurally closed end to end). The Pi's own
-	// finish-time recheck is the source-of-truth backstop for the lost-response edge:
-	// even a fresh ceremony with a correct proof must be refused 403 once a device
-	// exists. We exercise that gate on the REAL post-enrollment Pi server directly
-	// through its handler with the production tunnel marker stamped (the exact
-	// isTunneled branch the relay forward takes), since the relay can no longer
-	// supply a live bootstrap.
+	// ---- 9. CLOSED FIRST-SETUP WINDOW ----
+	// A device now exists, and the relay BURNED the bootstrap on the winning finish.
+	// The Pi must not mint or re-publish another first-setup QR/PIN while a
+	// passkey exists; adding more passkeys is authenticated owner management.
 	{
-		// Re-mint a PIN + bootstrap_id over the REAL LAN handler (spoofed private
-		// source) so we have a valid PIN and a bootstrap_id to compute a CORRECT
-		// proof. The mint still succeeds, but its self-publish goroutine no-ops
-		// because a device is enrolled — itself part of the closed-window guarantee
-		// (the relay never gets a fresh blob to forward).
 		pinReq2 := httptest.NewRequest(http.MethodGet, "/api/owner-access/enroll-pin", nil)
 		pinReq2.RemoteAddr = "192.168.7.42:53200"
 		pinRec2 := httptest.NewRecorder()
 		piHandler.ServeHTTP(pinRec2, pinReq2)
-		if pinRec2.Code != http.StatusOK {
-			t.Fatalf("re-mint enroll-pin: got %d body=%q", pinRec2.Code, pinRec2.Body.String())
+		if pinRec2.Code != http.StatusConflict {
+			t.Fatalf("re-mint enroll-pin after device exists: got %d body=%q, want 409 closed first-setup window", pinRec2.Code, pinRec2.Body.String())
 		}
-		var minted2 struct {
-			Pin         string `json:"pin"`
-			BootstrapID string `json:"bootstrap_id"`
-		}
-		if err := json.Unmarshal(pinRec2.Body.Bytes(), &minted2); err != nil {
-			t.Fatalf("decode re-mint enroll-pin: %v", err)
-		}
-		code, body := softwareEnrollDirectTunneled(t, piHandler, rpID, origin, tunnelMarker, minted2.Pin, minted2.BootstrapID)
-		if code != http.StatusForbidden {
-			t.Fatalf("tunneled finish after a device exists: got %d body=%q, want 403 (Pi zero-device recheck)", code, body)
-		}
-		// Still exactly one device — the recheck refused to enroll a second in the
-		// (now-closed) bootstrap window.
+		// Still exactly one device — the closed first-setup window did not enroll
+		// a second permanent owner credential.
 		devs, err := st.LoadTrustedDevices()
 		if err != nil {
 			t.Fatalf("load trusted devices after recheck: %v", err)
 		}
 		if len(devs) != 1 {
-			t.Fatalf("Pi zero-device recheck failed: want 1 device, got %d", len(devs))
+			t.Fatalf("closed first-setup window failed: want 1 device, got %d", len(devs))
 		}
 	}
 }

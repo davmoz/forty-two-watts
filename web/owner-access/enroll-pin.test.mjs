@@ -46,6 +46,8 @@ describe("enroll-pin module", () => {
   it("renders a copy button and a live countdown that re-mints on expiry", () => {
     assert.match(SRC, /pin-copy-btn/);
     assert.match(SRC, /clipboard\.writeText/);
+    assert.match(SRC, /execCommand\("copy"\)/, "copy has an insecure-LAN/Safari fallback");
+    assert.match(SRC, /Select PIN/, "copy failure selects the visible PIN instead of dead-ending");
     assert.match(SRC, /setInterval\(tick, 1000\)/, "countdown ticks once per second");
     assert.match(SRC, /mint a new PIN/i, "expired state offers a re-mint");
   });
@@ -74,6 +76,8 @@ describe("owner-access pages stop pointing users at the raw PIN endpoint", () =>
       "LAN-only means the Pi serves the page directly, not just apiBase()==='' on home.*");
     assert.match(ENROLL, /pinPanel\.remove\(\)/);
     assert.match(ENROLL, /id="pin-panel"/);
+    assert.match(ENROLL, /navigator\.credentials/);
+    assert.match(ENROLL, /Passkeys require HTTPS/);
     // index.html (the LAN landing) now surfaces the PIN inside the auto-shown
     // "Set up remote access" QR hero (setup-remote.js renders the 6-digit PIN below
     // the QR), so a separate bare mountEnrollPin panel is redundant there.

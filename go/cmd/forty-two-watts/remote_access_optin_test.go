@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -49,6 +50,60 @@ func TestOwnerRemoteAccessEnabledExplicitConfigWinsOverEnv(t *testing.T) {
 		})
 	}
 }
+
+func TestOwnerRelayURLIsOfficialDefaultOnlyAfterOptIn(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *config.Config
+		env  *string
+		want string
+	}{
+		{
+			name: "default off",
+			cfg:  &config.Config{},
+			want: "",
+		},
+		{
+			name: "env alone does not opt in",
+			cfg:  &config.Config{},
+			env:  strPtr("https://relay.example.test"),
+			want: "",
+		},
+		{
+			name: "enabled uses official relay by default",
+			cfg:  &config.Config{RemoteAccess: &config.RemoteAccess{Enabled: true}},
+			want: defaultOwnerRelayURL,
+		},
+		{
+			name: "enabled honours custom relay",
+			cfg:  &config.Config{RemoteAccess: &config.RemoteAccess{Enabled: true}},
+			env:  strPtr("https://relay.example.test/"),
+			want: "https://relay.example.test",
+		},
+		{
+			name: "enabled can explicitly disable relay with empty env",
+			cfg:  &config.Config{RemoteAccess: &config.RemoteAccess{Enabled: true}},
+			env:  strPtr(""),
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.env == nil {
+				t.Setenv("FTW_RELAY_URL", "")
+				_ = os.Unsetenv("FTW_RELAY_URL")
+			} else {
+				t.Setenv("FTW_RELAY_URL", *tt.env)
+			}
+			if got := ownerRelayURL(tt.cfg); got != tt.want {
+				t.Fatalf("ownerRelayURL() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func strPtr(s string) *string { return &s }
 
 func TestDeriveOwnerSiteIDNewInstallIsHighEntropy(t *testing.T) {
 	st, err := state.Open(filepath.Join(t.TempDir(), "state.db"))

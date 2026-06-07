@@ -140,6 +140,20 @@
         "; Path=/; Max-Age=2592000; SameSite=Lax" + secure;
     }
 
+    function canCreatePasskey() {
+      return !!(window.isSecureContext &&
+        window.PublicKeyCredential &&
+        navigator.credentials &&
+        typeof navigator.credentials.create === "function");
+    }
+
+    function passkeyUnavailableMessage() {
+      if (!window.isSecureContext) {
+        return "Passkeys require HTTPS. Scan the QR or open the setup link on https://home.fortytwowatts.com, not the local http:// address.";
+      }
+      return "Passkeys are not available in this browser. Use Safari, Chrome, Edge, or another device with passkeys enabled.";
+    }
+
     document.getElementById("cancel").onclick = () => {
       location.href = publicHomeTarget();
     };
@@ -162,6 +176,10 @@
       const name = nameInput.value.trim();
       if (!name) {
         msg.innerHTML = '<div class="err">Friendly name is required.</div>';
+        return;
+      }
+      if (!canCreatePasskey()) {
+        msg.innerHTML = '<div class="err">' + passkeyUnavailableMessage() + '</div>';
         return;
       }
       try {

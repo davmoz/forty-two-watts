@@ -56,6 +56,8 @@ import (
 // local runs.
 var Version = "dev"
 
+const defaultOwnerRelayURL = "https://relay.fortytwowatts.com"
+
 func main() {
 	// Subcommand dispatch — a bare first non-flag argument selects one
 	// of the bootstrap CLIs, e.g. `forty-two-watts nova-claim --url=…`.
@@ -1533,7 +1535,7 @@ func main() {
 		// makes the self-publish a no-op. Gating on remote_access happens at the
 		// publish call site via the zero-device window — a Pi that isn't dialing
 		// the relay simply never has its descriptor claimed.
-		RelayBaseURL: os.Getenv("FTW_RELAY_URL"),
+		RelayBaseURL: ownerRelayURL(cfg),
 		// InstanceSigner signs the owner-access instance descriptor with the same
 		// self-sovereign ES256 key. nil-safe: if identity load failed above,
 		// siteIdentity is nil and the descriptor endpoint returns 503.
@@ -1622,17 +1624,16 @@ func main() {
 	}()
 
 	// ---- Relay registration for owner remote access (Phase 3) ----
-	// When FTW_RELAY_URL is set, post our (site_id, host_id) to the
+	// When Remote Access is enabled, post our (site_id, host_id) to the
 	// relay periodically so /me/<site_id>/* routes to this instance.
 	// host_id is derived once from site_id + a stable random suffix.
-	if relayURL := os.Getenv("FTW_RELAY_URL"); relayURL != "" {
-		// OPT-IN, DEFAULT OFF: never dial out on FTW_RELAY_URL alone. Opt in via
-		// config (remote_access.enabled). Environment alone must not opt a Pi into
-		// dialing the relay.
-		enabled := ownerRemoteAccessEnabled(cfg)
+	// OPT-IN, DEFAULT OFF: the Pi only dials the relay when config opts in.
+	// Once opted in, the official relay is the default so a normal release image
+	// works without a local FTW_RELAY_URL override. Operators can still override
+	// FTW_RELAY_URL for self-hosted/dev relays, or set it explicitly empty to
+	// disable dialing despite an enabled config.
+	if relayURL := ownerRelayURL(cfg); relayURL != "" {
 		switch {
-		case !enabled:
-			slog.Info("owner-access: FTW_RELAY_URL set but remote access is not enabled — not dialing the relay (set remote_access.enabled=true)")
 		case siteIdentity == nil:
 			// The relay requires an ES256-signed registration. Without a site
 			// identity we cannot sign, so we must not register (an unsigned
@@ -1653,6 +1654,10 @@ func main() {
 			}
 			go runOwnerRelayRegistration(ctx, relayURL, ownerSiteID, deriveOwnerHostID(st, cfg.Site.Name), tunnelMarker, cfg.API.Port, siteIdentity, p2pMgr)
 		}
+	} else if os.Getenv("FTW_RELAY_URL") != "" && !ownerRemoteAccessEnabled(cfg) {
+		slog.Info("owner-access: FTW_RELAY_URL set but remote access is not enabled — not dialing the relay (set remote_access.enabled=true)")
+	} else if ownerRemoteAccessEnabled(cfg) {
+		slog.Info("owner-access: remote_access enabled but relay URL is empty — not dialing the relay")
 	}
 
 	// ---- Notifications (always constructed so API + applier hold live refs) ----
@@ -2858,6 +2863,13 @@ func envOr(key, def string) string {
 
 func ownerRemoteAccessEnabled(cfg *config.Config) bool {
 	return cfg != nil && cfg.RemoteAccess != nil && cfg.RemoteAccess.Enabled
+}
+
+func ownerRelayURL(cfg *config.Config) string {
+	if !ownerRemoteAccessEnabled(cfg) {
+		return ""
+	}
+	return strings.TrimRight(envOr("FTW_RELAY_URL", defaultOwnerRelayURL), "/")
 }
 
 // instanceSignerOrNil returns id as an api.InstanceSigner, or a genuine nil

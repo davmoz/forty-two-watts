@@ -141,7 +141,7 @@ test("claimAndVerify ABORTS when the relay-reported site_id disagrees with the s
 test("claimAndVerify surfaces a 404 (expired/absent window) cleanly", async () => {
   const relay = async () => ({ status: 404, ok: false, json: async () => ({}) });
   const ck = await claimKeyFromBootstrapId("id");
-  await assert.rejects(() => claimAndVerify("https://home.test", ck, relay), /no live setup link|expired/i);
+  await assert.rejects(() => claimAndVerify("https://home.test", ck, relay), /no longer live|fresh setup QR|single-use/i);
 });
 
 // ---- source hygiene: lock in the enroll.html bootstrap-courier contract ----

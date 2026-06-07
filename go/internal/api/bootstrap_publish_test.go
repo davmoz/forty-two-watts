@@ -55,10 +55,10 @@ func verifyES256HexForTest(t *testing.T, pubKeyHex, msg, sigHex string) bool {
 
 // fakeBootstrapRelay captures the PUT /bootstrap/{site_id} body.
 type fakeBootstrapRelay struct {
-	mu       sync.Mutex
-	siteID   string
-	body     bootstrapPublishIO
-	gotPut   bool
+	mu     sync.Mutex
+	siteID string
+	body   bootstrapPublishIO
+	gotPut bool
 }
 
 func newFakeBootstrapRelay(t *testing.T) (*fakeBootstrapRelay, *httptest.Server) {
@@ -103,7 +103,9 @@ func TestBootstrapPublishSignsBothWireForms(t *testing.T) {
 	// The Pi keys the relay store on the high-entropy bootstrap_id, NOT the PIN.
 	const bootstrapID = "Zm9vYmFyLWhpZ2gtZW50cm9weS1ib290c3RyYXAtaWQtMzJieXRlcw"
 	before := time.Now().UnixMilli()
-	srv.publishBootstrapDescriptor(bootstrapID)
+	if err := srv.publishBootstrapDescriptor(bootstrapID); err != nil {
+		t.Fatalf("publish bootstrap descriptor: %v", err)
+	}
 	after := time.Now().UnixMilli()
 
 	fr.mu.Lock()
@@ -191,7 +193,9 @@ func TestBootstrapPublishSkippedWhenDevicesEnrolled(t *testing.T) {
 	}
 	srv := New(d)
 
-	srv.publishBootstrapDescriptor("Zm9vYmFyLWhpZ2gtZW50cm9weS1ib290c3RyYXAtaWQ")
+	if err := srv.publishBootstrapDescriptor("Zm9vYmFyLWhpZ2gtZW50cm9weS1ib290c3RyYXAtaWQ"); err == nil {
+		t.Fatalf("publish must report a closed bootstrap window once a device is enrolled")
+	}
 
 	fr.mu.Lock()
 	defer fr.mu.Unlock()
@@ -213,7 +217,7 @@ func TestBootstrapPublishSkippedWhenNoRelay(t *testing.T) {
 	d.RelayBaseURL = "" // LAN-only
 	srv := New(d)
 
-	// Must not panic / block. No relay to assert against; the contract is just
-	// "returns cleanly".
-	srv.publishBootstrapDescriptor("Zm9vYmFyLWhpZ2gtZW50cm9weS1ib290c3RyYXAtaWQ")
+	if err := srv.publishBootstrapDescriptor("Zm9vYmFyLWhpZ2gtZW50cm9weS1ib290c3RyYXAtaWQ"); err == nil {
+		t.Fatalf("publish without a relay URL must report an unavailable setup link")
+	}
 }

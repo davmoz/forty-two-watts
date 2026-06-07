@@ -50,6 +50,42 @@ function fmtCountdown(s) {
   return m + ":" + String(sec).padStart(2, "0");
 }
 
+async function copyText(text) {
+  if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_) { /* fall through to the selection fallback */ }
+  }
+  if (typeof document === "undefined" || !document.createElement || !document.body) return false;
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.top = "-1000px";
+  ta.style.left = "-1000px";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  let ok = false;
+  try {
+    ok = !!(document.execCommand && document.execCommand("copy"));
+  } catch (_) {
+    ok = false;
+  }
+  ta.remove();
+  return ok;
+}
+
+function selectText(el) {
+  if (!el || typeof window === "undefined" || typeof document === "undefined" || !window.getSelection || !document.createRange) return;
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
 // drawQR paints the boolean module matrix into a <canvas>, scaled to fit `target`
 // device pixels with a 4-module quiet zone (the QR-spec minimum margin), in the
 // page's foreground/background tokens. Returns the canvas element.
@@ -132,7 +168,7 @@ export function mountSetupRemote(host, opts) {
     const url = enrollUrl(resolveRpId(), bootstrapId);
     out.hidden = false;
     out.innerHTML =
-      '<p class="eyebrow">Scan to set up another device</p>' +
+      '<p class="eyebrow">Scan to set up your first remote passkey</p>' +
       '<div class="setup-qr"></div>' +
       '<p class="setup-link-row">or open <a class="setup-link" target="_blank" rel="noopener noreferrer"></a></p>' +
       '<hr class="setup-sep">' +
@@ -142,7 +178,7 @@ export function mountSetupRemote(host, opts) {
         '<button type="button" class="pin-copy-btn">Copy</button>' +
         '<span class="pin-countdown" aria-live="polite"></span>' +
       '</div>' +
-      '<p class="setup-note">The QR carries the secure handle. Type this PIN on the new device only if it asks for it.</p>';
+      '<p class="setup-note">The QR carries a one-time secure handle. Type this PIN on the new device only if it asks for it.</p>';
 
     // QR canvas.
     try {
@@ -158,14 +194,18 @@ export function mountSetupRemote(host, opts) {
     a.textContent = url;
 
     // PIN digits + copy.
-    out.querySelector(".pin-digits").textContent = pin;
+    const pinDigits = out.querySelector(".pin-digits");
+    pinDigits.textContent = pin;
     const copyBtn = out.querySelector(".pin-copy-btn");
     copyBtn.onclick = async () => {
-      try {
-        await navigator.clipboard.writeText(pin);
+      if (await copyText(pin)) {
         copyBtn.textContent = "Copied";
         setTimeout(() => { copyBtn.textContent = "Copy"; }, 1500);
-      } catch (e) { copyBtn.textContent = "Copy failed"; }
+      } else {
+        selectText(pinDigits);
+        copyBtn.textContent = "Select PIN";
+        setTimeout(() => { copyBtn.textContent = "Copy"; }, 2000);
+      }
     };
 
     // Live countdown; re-mint on expiry (a fresh GET mints a fresh PIN + id).
@@ -194,6 +234,16 @@ export function mountSetupRemote(host, opts) {
     try {
       const r = await fetch(apiBase() + "/api/owner-access/enroll-pin", { credentials: "same-origin" });
       if (r.status === 403) { renderRemote(); return; }
+      if (r.status === 409) {
+        const body = await r.text();
+        renderError(body || "Remote Access is not ready. Enable it in Settings -> Access, save, and restart before creating a setup link.");
+        return;
+      }
+      if (r.status === 502) {
+        const body = await r.text();
+        renderError(body || "The setup link could not be published to the relay. Check Remote Access and try again.");
+        return;
+      }
       if (!r.ok) { renderError("Couldn't start setup (" + r.status + ")."); return; }
       const body = await r.json();
       if (!body || !body.bootstrap_id || !body.pin) { renderError("Server returned an incomplete setup response."); return; }
