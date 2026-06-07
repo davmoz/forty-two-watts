@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.120.3
+
+### Patch Changes
+
+- Add Remote Access support diagnostics: stable `FTW_*` error codes on relay/Pi setup failures, clearer passkey enroll/login troubleshooting details, and a browser-local reset button for stale remote routing cache.
+
 ## 0.120.2
 
 ### Patch Changes

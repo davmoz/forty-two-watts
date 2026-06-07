@@ -36,7 +36,18 @@ describe("remote loader auto-open guard", () => {
     assert.match(LOADER, /clearCachedDirectory\(\);[\s\S]*?dir = await loadDirectory\(W, encKey, location\.origin\)/);
   });
 
+  it("offers a browser-local remote reset that clears routing caches", () => {
+    assert.match(HTML, /id="reset-browser"/);
+    assert.match(LOADER, /function resetThisBrowser\(\)/);
+    assert.match(LOADER, /clearRouteCookie\(\)/);
+    assert.match(LOADER, /clearRemoteLocalStorage\(\)/);
+    assert.match(LOADER, /indexedDB\.deleteDatabase\(name\)/);
+    assert.match(LOADER, /caches\.keys\(\)/);
+    assert.match(LOADER, /serviceWorker\.getRegistrations/);
+    assert.match(LOADER, /reset_remote=1/);
+  });
+
   it("bumps the loader script URL when bootstrap behavior changes", () => {
-    assert.match(HTML, /remote-loader\.js\?v=loader3/);
+    assert.match(HTML, /remote-loader\.js\?v=loader4/);
   });
 });

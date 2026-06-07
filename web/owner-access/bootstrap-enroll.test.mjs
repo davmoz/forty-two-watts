@@ -144,6 +144,20 @@ test("claimAndVerify surfaces a 404 (expired/absent window) cleanly", async () =
   await assert.rejects(() => claimAndVerify("https://home.test", ck, relay), /no longer live|fresh setup QR|single-use/i);
 });
 
+test("claimAndVerify preserves relay diagnostic codes on non-404 claim failures", async () => {
+  const relay = async () => ({
+    status: 429,
+    ok: false,
+    headers: { get: (name) => name === "X-FTW-Error-Code" ? "FTW_BOOTSTRAP_RATE_LIMITED" : "" },
+    text: async () => "FTW_BOOTSTRAP_RATE_LIMITED: too many setup attempts",
+  });
+  const ck = await claimKeyFromBootstrapId("id");
+  await assert.rejects(
+    async () => claimAndVerify("https://home.test", ck, relay),
+    (err) => err.code === "FTW_BOOTSTRAP_RATE_LIMITED" && /429/.test(err.message),
+  );
+});
+
 // ---- source hygiene: lock in the enroll.html bootstrap-courier contract ----
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -169,6 +183,13 @@ test("enroll.html sends claim_key (relay gate) AND pin (Pi factor) on start AND 
   // Both enroll RPCs go through the transport selector that adds claim_key/pin.
   assert.match(ENROLL, /enrollFetch\("start"/);
   assert.match(ENROLL, /enrollFetch\("finish"/);
+});
+
+test("enroll.html renders support details for failed enroll RPCs", () => {
+  assert.match(ENROLL, /X-FTW-Error-Code/);
+  assert.match(ENROLL, /Support details/);
+  assert.match(ENROLL, /Setup handle/);
+  assert.match(ENROLL, /FTW_REMOTE_P2P_ONLY/);
 });
 
 test("enroll.html bootstrap path raw-fetches the relay (NOT ownerFetch/P2P) — keyless device", () => {

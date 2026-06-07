@@ -172,6 +172,20 @@ stranger.
 - **I'm at home but it asked me to sign in.** Your browser may be on a guest
   VLAN or mobile data rather than the home Wi-Fi. Signing in with your passkey
   works regardless.
+- **Setup shows a `FTW_*` code.** Send that code with the short "Support
+  details" shown on the page. The useful ones are:
+  - `FTW_BOOTSTRAP_CLAIM_REQUIRED` — the setup link lost the secret `#b=...`
+    handle. Mint a fresh QR from local **Access** and scan/open the full link.
+  - `FTW_BOOTSTRAP_NOT_LIVE` — the QR/PIN window expired or was already used.
+    Mint a fresh one locally.
+  - `FTW_REMOTE_P2P_ONLY` / `FTW_REMOTE_API_P2P_ONLY` — the browser tried to
+    call an owner API directly through the relay. Use the first-setup QR flow,
+    or wait for the secure channel before signing in.
+  - `FTW_REMOTE_HOME_OFFLINE` / `FTW_REMOTE_HOME_NO_RESPONSE` — the relay cannot
+    reach the Pi. Check that Remote Access is enabled and the service is running.
+- **The browser seems stuck on old routing.** On `https://home.fortytwowatts.com`
+  use **Reset this browser**. It clears only local routing/cache state for that
+  browser; it does not remove passkeys or change anything on the Pi.
 
 ---
 

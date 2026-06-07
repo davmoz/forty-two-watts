@@ -86,6 +86,17 @@ function selectText(el) {
   sel.addRange(range);
 }
 
+function errorCodeFromText(text) {
+  const m = /^([A-Z0-9_]+):/.exec(String(text || ""));
+  return m ? m[1] : "";
+}
+
+function responseErrorCode(r, body) {
+  return (r.headers && r.headers.get && r.headers.get("X-FTW-Error-Code")) ||
+    errorCodeFromText(body) ||
+    ("FTW_HTTP_" + r.status);
+}
+
 // drawQR paints the boolean module matrix into a <canvas>, scaled to fit `target`
 // device pixels with a 4-module quiet zone (the QR-spec minimum margin), in the
 // page's foreground/background tokens. Returns the canvas element.
@@ -234,17 +245,23 @@ export function mountSetupRemote(host, opts) {
     try {
       const r = await fetch(apiBase() + "/api/owner-access/enroll-pin", { credentials: "same-origin" });
       if (r.status === 403) { renderRemote(); return; }
-      if (r.status === 409) {
-        const body = await r.text();
-        renderError(body || "Remote Access is not ready. Enable it in Settings -> Access, save, and restart before creating a setup link.");
-        return;
-      }
-      if (r.status === 502) {
-        const body = await r.text();
-        renderError(body || "The setup link could not be published to the relay. Check Remote Access and try again.");
-        return;
-      }
-      if (!r.ok) { renderError("Couldn't start setup (" + r.status + ")."); return; }
+	      if (r.status === 409) {
+	        const body = await r.text();
+	        const code = responseErrorCode(r, body);
+	        renderError((body || "Remote Access is not ready. Enable it in Settings -> Access, save, and restart before creating a setup link.") + " [" + code + "]");
+	        return;
+	      }
+	      if (r.status === 502) {
+	        const body = await r.text();
+	        const code = responseErrorCode(r, body);
+	        renderError((body || "The setup link could not be published to the relay. Check Remote Access and try again.") + " [" + code + "]");
+	        return;
+	      }
+	      if (!r.ok) {
+	        const body = await r.text();
+	        renderError("Couldn't start setup (" + r.status + "). " + (body || responseErrorCode(r, body)));
+	        return;
+	      }
       const body = await r.json();
       if (!body || !body.bootstrap_id || !body.pin) { renderError("Server returned an incomplete setup response."); return; }
       renderSetup(String(body.bootstrap_id), String(body.pin), Number(body.expires_in_s) || 0);

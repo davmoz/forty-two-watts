@@ -74,6 +74,12 @@ test("setup-remote.js reads the {bootstrap_id, pin, expires_in_s} endpoint shape
   assert.match(SRC, /expires_in_s/);
 });
 
+test("setup-remote.js surfaces backend diagnostic codes when setup minting fails", () => {
+  assert.match(SRC, /X-FTW-Error-Code/);
+  assert.match(SRC, /responseErrorCode/);
+  assert.match(SRC, /FTW_HTTP_/);
+});
+
 test("setup-remote.js is LAN-only and degrades on a relay page / 403", () => {
   assert.match(SRC, /apiBase\(\)\s*!==\s*['"]['"]/, "relay page → LAN-only notice");
   assert.match(SRC, /status\s*===\s*403/, "403 → LAN-only notice");

@@ -89,6 +89,9 @@ func TestEnrollPinLANvsTunnel(t *testing.T) {
 	if rec2.Code != 403 {
 		t.Fatalf("tunnelled enroll-pin must be 403, got %d body=%q", rec2.Code, rec2.Body.String())
 	}
+	if got := rec2.Header().Get("X-FTW-Error-Code"); got != errEnrollPinLANOnly {
+		t.Fatalf("tunnelled enroll-pin error code = %q, want %q", got, errEnrollPinLANOnly)
+	}
 }
 
 // mintEnrollPin issues a pin over a genuine LAN request and returns it.
@@ -124,6 +127,9 @@ func TestOwnerEnrollPinRequiresRemoteAccessOptIn(t *testing.T) {
 	if rec.Code != 409 {
 		t.Fatalf("remote-off enroll-pin should be 409, got %d body=%q", rec.Code, rec.Body.String())
 	}
+	if got := rec.Header().Get("X-FTW-Error-Code"); got != errRemoteAccessOff {
+		t.Fatalf("remote-off error code = %q, want %q", got, errRemoteAccessOff)
+	}
 }
 
 func TestOwnerEnrollPinRequiresRestartAfterOptIn(t *testing.T) {
@@ -141,6 +147,9 @@ func TestOwnerEnrollPinRequiresRestartAfterOptIn(t *testing.T) {
 	if rec.Code != 409 {
 		t.Fatalf("restart-needed enroll-pin should be 409, got %d body=%q", rec.Code, rec.Body.String())
 	}
+	if got := rec.Header().Get("X-FTW-Error-Code"); got != errRemoteRestartRequired {
+		t.Fatalf("restart-needed error code = %q, want %q", got, errRemoteRestartRequired)
+	}
 }
 
 // A tunnelled bootstrap enroll/start WITHOUT a pin must be 403.
@@ -156,6 +165,9 @@ func TestEnrollPinTunnelBootstrapWithoutPin(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != 403 {
 		t.Fatalf("tunnelled bootstrap without pin must be 403, got %d body=%q", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-FTW-Error-Code"); got != errEnrollPinRequired {
+		t.Fatalf("missing-pin error code = %q, want %q", got, errEnrollPinRequired)
 	}
 }
 
@@ -198,6 +210,9 @@ func TestEnrollPinTunnelBootstrapWrongPin(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != 403 {
 		t.Fatalf("tunnelled bootstrap with wrong pin must be 403, got %d body=%q", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-FTW-Error-Code"); got != errEnrollPinRequired {
+		t.Fatalf("wrong-pin error code = %q, want %q", got, errEnrollPinRequired)
 	}
 }
 

@@ -298,7 +298,8 @@ func (r *Relay) homeStaticForward(w http.ResponseWriter, req *http.Request) {
 	// and must travel inside DTLS only. Anything else is refused here so the
 	// relay can never see (or be tricked into proxying) owner traffic.
 	if req.Method != http.MethodGet {
-		http.Error(w, "owner API is P2P-only; this relay serves static assets only", http.StatusMethodNotAllowed)
+		writeRemoteError(w, req, http.StatusMethodNotAllowed, errRemoteP2POnly,
+			"owner/control requests must use the private P2P channel. For first passkey setup, open a fresh setup QR from local Access and use the https://home.fortytwowatts.com link.")
 		return
 	}
 	// Reserve the multi-tenant API-plane paths. Under -multi-tenant these are
@@ -320,7 +321,8 @@ func (r *Relay) homeStaticForward(w http.ResponseWriter, req *http.Request) {
 	// plane stays strictly P2P.
 	if r.MultiTenant {
 		if strings.HasPrefix(req.URL.Path, "/api/") {
-			http.Error(w, "owner API is P2P-only; not served over the relay", http.StatusForbidden)
+			writeRemoteError(w, req, http.StatusForbidden, errRemoteAPIP2POnly,
+				"owner API is P2P-only; this relay serves only the bootstrap loader and static app files.")
 			return
 		}
 		if req.URL.Query().Get("reset_remote") == "1" {
@@ -362,7 +364,8 @@ func (r *Relay) homeStaticForward(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if isOwnerAPIPath(req.URL.Path) {
-		http.Error(w, "owner API is P2P-only; not served over the relay", http.StatusForbidden)
+		writeRemoteError(w, req, http.StatusForbidden, errRemoteAPIP2POnly,
+			"owner API is P2P-only; this relay serves only the bootstrap loader and static app files.")
 		return
 	}
 	// SINGLE-TENANT SLICE 1: when -home-web is set, serve the static shell from

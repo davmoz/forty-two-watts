@@ -705,6 +705,9 @@ func TestBootstrapEnrollForwardNoClaimKey(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("missing claim_key: got %d, want 403", resp.StatusCode)
 	}
+	if got := resp.Header.Get("X-FTW-Error-Code"); got != errBootstrapClaimRequired {
+		t.Fatalf("missing claim_key error code = %q, want %q", got, errBootstrapClaimRequired)
+	}
 }
 
 // TestBootstrapEnrollForwardHomeOffline: 503 when the resolved site's Pi is not
@@ -724,5 +727,64 @@ func TestBootstrapEnrollForwardHomeOffline(t *testing.T) {
 	resp, _ := enrollPost(t, srv.URL, "/api/owner-access/enroll/start?claim_key="+claimKey+"&pin="+pin)
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("home offline: got %d, want 503", resp.StatusCode)
+	}
+	if got := resp.Header.Get("X-FTW-Error-Code"); got != errRemoteHomeOffline {
+		t.Fatalf("home offline error code = %q, want %q", got, errRemoteHomeOffline)
+	}
+}
+
+func TestBootstrapEnrollForwardMissingClaimHasDiagnosticBody(t *testing.T) {
+	relay := newMultiTenantRelay(t)
+	srv := httptest.NewServer(relay.Handler())
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/owner-access/enroll/start?pin=123456", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "home.test"
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("diagnostic route precondition changed: got %d body=%q, want 403 from bootstrap-forward", resp.StatusCode, body)
+	}
+	if got := resp.Header.Get("X-FTW-Error-Code"); got != errBootstrapClaimRequired {
+		t.Fatalf("diagnostic code = %q, want %q body=%q", got, errBootstrapClaimRequired, body)
+	}
+	if !strings.Contains(string(body), errBootstrapClaimRequired) {
+		t.Fatalf("body %q does not include code %q", body, errBootstrapClaimRequired)
+	}
+}
+
+func TestHomeHostRawOwnerPOSTHasP2POnlyDiagnosticCode(t *testing.T) {
+	relay := newMultiTenantRelay(t)
+	srv := httptest.NewServer(relay.Handler())
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/status", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "home.test"
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("raw owner POST: got %d body=%q, want 405", resp.StatusCode, body)
+	}
+	if got := resp.Header.Get("X-FTW-Error-Code"); got != errRemoteP2POnly {
+		t.Fatalf("raw owner POST code = %q, want %q body=%q", got, errRemoteP2POnly, body)
+	}
+	if !strings.Contains(string(body), errRemoteP2POnly) {
+		t.Fatalf("body %q does not include code %q", body, errRemoteP2POnly)
 	}
 }

@@ -68,6 +68,16 @@
       opacity: .62;
       cursor: wait;
     }
+    button.secondary {
+      margin-top: 10px;
+      border-color: var(--line);
+      background: transparent;
+      color: var(--muted);
+      font-weight: 550;
+    }
+    button.secondary:disabled {
+      opacity: .62;
+    }
     .status {
       min-height: 22px;
       margin-top: 18px;
@@ -89,9 +99,10 @@
     <h1>Reach your home</h1>
     <p id="copy">Unlock your saved home directory with your passkey. The app itself loads from your Pi.</p>
     <button id="unlock" type="button">Continue with passkey</button>
+    <button id="reset-browser" class="secondary" type="button">Reset this browser</button>
     <div id="status" class="status" role="status" aria-live="polite">Checking this browser...</div>
     <a class="learn" href="https://fortytwowatts.com" rel="noopener">Learn more</a>
   </main>
-  <script type="module" src="/remote-loader.js?v=loader3"></script>
+  <script type="module" src="/remote-loader.js?v=loader4"></script>
 </body>
 </html>

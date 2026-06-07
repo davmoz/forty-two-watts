@@ -14,10 +14,15 @@
     input { font: inherit; padding: .5rem; width: 100%; box-sizing: border-box; border: 1px solid var(--line, #ddd); border-radius: .3rem; background: var(--bg, #fff); color: inherit; }
     button { font: inherit; padding: .6rem 1.2rem; border-radius: .3rem; border: 1px solid var(--line, #ddd); cursor: pointer; background: var(--ink-raised, #fafafa); color: inherit; margin-top: 1rem; }
     button.primary { background: var(--accent-e, #f0c040); border-color: var(--accent-e, #f0c040); color: #0a0a0a; font-weight: 600; }
-    .err { color: #c00; background: #fee; border: 1px solid #fcc; padding: .5rem; border-radius: .3rem; margin: 1rem 0; }
-    .ok { color: #060; background: #efe; border: 1px solid #cfc; padding: .5rem; border-radius: .3rem; margin: 1rem 0; }
-    .muted { color: var(--fg-muted, #888); font-size: .9em; }
-    .code { font-family: var(--mono), monospace; background: var(--ink-raised, #f4f4f4); padding: .2rem .4rem; border-radius: .2rem; }
+	    .err { color: #c00; background: #fee; border: 1px solid #fcc; padding: .5rem; border-radius: .3rem; margin: 1rem 0; }
+	    .ok { color: #060; background: #efe; border: 1px solid #cfc; padding: .5rem; border-radius: .3rem; margin: 1rem 0; }
+	    .muted { color: var(--fg-muted, #888); font-size: .9em; }
+	    .code { font-family: var(--mono), monospace; background: var(--ink-raised, #f4f4f4); padding: .2rem .4rem; border-radius: .2rem; }
+	    .diag { margin-top: .75rem; color: #700; }
+	    .diag summary { cursor: pointer; font-weight: 600; }
+	    .diag dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem .65rem; margin: .5rem 0 0; }
+	    .diag dt { font-weight: 600; }
+	    .diag dd { margin: 0; overflow-wrap: anywhere; font-family: var(--mono), monospace; }
 
     /* Enrollment-PIN affordance (enroll-pin.js). Mono + tabular for the
        digits, hairline border, single amber accent — per DESIGN.md. */
@@ -147,16 +152,108 @@
         typeof navigator.credentials.create === "function");
     }
 
-    function passkeyUnavailableMessage() {
-      if (!window.isSecureContext) {
-        return "Passkeys require HTTPS. Scan the QR or open the setup link on https://home.fortytwowatts.com, not the local http:// address.";
-      }
-      return "Passkeys are not available in this browser. Use Safari, Chrome, Edge, or another device with passkeys enabled.";
-    }
+	    function passkeyUnavailableMessage() {
+	      if (!window.isSecureContext) {
+	        return "Passkeys require HTTPS. Scan the QR or open the setup link on https://home.fortytwowatts.com, not the local http:// address.";
+	      }
+	      return "Passkeys are not available in this browser. Use Safari, Chrome, Edge, or another device with passkeys enabled.";
+	    }
 
-    document.getElementById("cancel").onclick = () => {
-      location.href = publicHomeTarget();
-    };
+	    function esc(s) {
+	      return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
+	        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+	      }[c]));
+	    }
+
+	    function errorCodeFromText(text) {
+	      const m = /^([A-Z0-9_]+):/.exec(String(text || ""));
+	      return m ? m[1] : "";
+	    }
+
+	    function responseErrorCode(response, body) {
+	      return (response.headers && response.headers.get && response.headers.get("X-FTW-Error-Code")) ||
+	        errorCodeFromText(body) ||
+	        ("FTW_HTTP_" + response.status);
+	    }
+
+	    function p2pState() {
+	      try {
+	        if (window.ftwP2P && typeof window.ftwP2P.state === "function") return window.ftwP2P.state();
+	      } catch (_) { /* ignore diagnostics only */ }
+	      return "unavailable";
+	    }
+
+	    function hintFor(code, status, body) {
+	      const text = String(body || "");
+	      if (code === "FTW_REMOTE_P2P_ONLY" || status === 405) {
+	        return "This request reached the public relay as a raw owner API call. For first setup, mint a fresh QR from local Access and scan/open the full https://home.fortytwowatts.com setup link. For adding another passkey later, sign in first and wait for the secure channel.";
+	      }
+	      if (code === "FTW_BOOTSTRAP_CLAIM_REQUIRED") {
+	        return "The setup link lost its secure #b handle. Scan the QR again or copy the full link, including the part after #.";
+	      }
+	      if (code === "FTW_BOOTSTRAP_NOT_LIVE" || status === 404) {
+	        return "The setup window is no longer live. Create a fresh setup QR from Settings -> Access on the local network.";
+	      }
+	      if (code === "FTW_REMOTE_HOME_OFFLINE" || code === "FTW_REMOTE_HOME_NO_RESPONSE") {
+	        return "The relay cannot reach your Pi. Check that Remote Access is enabled locally and that the service is running.";
+	      }
+	      if (code === "FTW_ENROLL_PIN_REQUIRED" || /pin/i.test(text)) {
+	        return "Enter the 6-digit PIN shown next to the QR on your local 42W Access screen, then try again.";
+	      }
+	      if (code === "FTW_ENROLL_SESSION_REQUIRED") {
+	        return "This is the add-passkey path. Sign in with an existing passkey first, then open Access to add another one.";
+	      }
+	      if (code === "FTW_FIRST_SETUP_CLOSED") {
+	        return "A passkey already exists. First setup is single-use; sign in and manage passkeys from Access.";
+	      }
+	      if (code === "FTW_BOOTSTRAP_PUBLISH_FAILED") {
+	        return "The Pi could not publish the setup link to the relay. Toggle Remote Access off/on, save, restart if prompted, then mint a fresh QR.";
+	      }
+	      return "Retry once. If it repeats, send the support code and diagnostics below.";
+	    }
+
+	    function diagnostics(stage, code, status) {
+	      return '<details class="diag" open>' +
+	        '<summary>Support details</summary>' +
+	        '<dl>' +
+	          '<dt>Code</dt><dd>' + esc(code) + '</dd>' +
+	          '<dt>Step</dt><dd>' + esc(stage) + '</dd>' +
+	          '<dt>Status</dt><dd>' + esc(status) + '</dd>' +
+	          '<dt>Host</dt><dd>' + esc(location.host) + '</dd>' +
+	          '<dt>Path</dt><dd>' + esc(location.pathname) + '</dd>' +
+	          '<dt>Setup handle</dt><dd>' + (bootstrapId ? "present" : "missing") + '</dd>' +
+	          '<dt>LAN</dt><dd>' + esc(isLanOrigin() ? "yes" : "no") + '</dd>' +
+	          '<dt>P2P</dt><dd>' + esc(p2pState()) + '</dd>' +
+	        '</dl>' +
+	      '</details>';
+	    }
+
+	    function renderFailure(stage, response, body) {
+	      const code = responseErrorCode(response, body);
+	      const hint = hintFor(code, response.status, body);
+	      msg.innerHTML = '<div class="err">' +
+	        '<strong>' + esc(stage) + ' failed (' + esc(response.status) + ')</strong><br>' +
+	        '<span>' + esc(body || code) + '</span>' +
+	        '<p>' + esc(hint) + '</p>' +
+	        diagnostics(stage, code, response.status) +
+	      '</div>';
+	    }
+
+	    function renderException(e) {
+	      const code = e && e.code ? e.code : (e && e.name ? e.name : "FTW_ENROLL_EXCEPTION");
+	      const status = e && e.status ? e.status : "n/a";
+	      const body = e && e.message ? e.message : String(e);
+	      msg.innerHTML = '<div class="err">' +
+	        '<strong>' + esc(code) + '</strong><br>' +
+	        '<span>' + esc(body) + '</span>' +
+	        '<p>' + esc(hintFor(code, status, body)) + '</p>' +
+	        diagnostics("exception", code, status) +
+	      '</div>';
+	    }
+
+	    document.getElementById("cancel").onclick = () => {
+	      location.href = publicHomeTarget();
+	    };
 
     // enrollFetch picks the transport for the two enroll RPCs:
     //   - bootstrap (first device, has bootstrap_id): RAW fetch to the relay's
@@ -202,15 +299,12 @@
         const startQuery = bootstrapId
           ? ("claim_key=" + encodeURIComponent(claimKey) + (pin ? ("&pin=" + encodeURIComponent(pin)) : ""))
           : (pin ? ("pin=" + encodeURIComponent(pin)) : "");
-        const start = await enrollFetch("start", startQuery, { method: "POST" });
-        if (!start.ok) {
-          const body = await start.text();
-          const hint = (start.status === 403 && /pin/i.test(body))
-            ? ' — this passkey needs the 6-digit PIN shown next to the QR on your home network. Enter it above.'
-            : '';
-          msg.innerHTML = `<div class="err">Start failed (${start.status}): ${body}${hint}</div>`;
-          return;
-        }
+	        const start = await enrollFetch("start", startQuery, { method: "POST" });
+	        if (!start.ok) {
+	          const body = await start.text();
+	          renderFailure("Start", start, body);
+	          return;
+	        }
         const { ceremony_token, options } = await start.json();
 
         // 2. Browser ceremony. Request the PRF extension so THIS credential can
@@ -273,12 +367,12 @@
           headers: { "Content-Type": "application/json" },
           body: bodyString,
           credentials: "same-origin",
-        });
-        if (!finish.ok) {
-          const body = await finish.text();
-          msg.innerHTML = `<div class="err">Finish failed (${finish.status}): ${body}</div>`;
-          return;
-        }
+	        });
+	        if (!finish.ok) {
+	          const body = await finish.text();
+	          renderFailure("Finish", finish, body);
+	          return;
+	        }
         const out = await finish.json();
         msg.innerHTML = '<div class="ok">Enrolled <span class="code">' + (out.friendly_name || name) + '</span>. Opening your home…</div>';
 
@@ -329,10 +423,10 @@
         if (routeEntry) setHomeRouteCookie(routeEntry.site_id);
 
         setTimeout(() => location.href = publicHomeTarget(), 800);
-      } catch (e) {
-        msg.innerHTML = `<div class="err">${e.name}: ${e.message}</div>`;
-      }
-    };
+	      } catch (e) {
+	        renderException(e);
+	      }
+	    };
   </script>
 </body>
 </html>

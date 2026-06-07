@@ -229,30 +229,32 @@ func (r *Relay) bootstrapClaim(w http.ResponseWriter, req *http.Request) {
 // it (ownerAccessState.validateEnrollPin, 5-try burn). The relay NEVER inspects the
 // PIN — so a leaked store key never reveals a guessable PIN, and the relay can't
 // ride the enroll forward without the PIN the Pi still demands. Gates, in order:
-//   - 503  bootstrap store not configured
-//   - 429  per-source-IP rate limit (memory-flood backstop)
-//   - 403  no claim_key query param
-//   - 403  claim_key not 64-char lowercase hex (malformed handle, before any lookup)
-//   - 403  claim_key resolves to no LIVE bootstrap blob (the resolved site has no open window)
-//   - 403  (finish) the bootstrap is already RESERVED by a concurrent in-flight finish
-//   - 503  the resolved site's Pi is offline (not registered / stale)
-//   - 413  request body over the control-body cap
-//   - 502  the tunnel RPC to the Pi failed (reservation released)
+//   - 503  FTW_BOOTSTRAP_STORE_UNAVAILABLE: bootstrap store not configured
+//   - 429  FTW_BOOTSTRAP_RATE_LIMITED: per-source-IP rate limit (memory-flood backstop)
+//   - 403  FTW_BOOTSTRAP_CLAIM_REQUIRED: no claim_key query param
+//   - 403  FTW_BOOTSTRAP_NOT_LIVE: malformed/dead/reserved claim_key
+//   - 503  FTW_REMOTE_HOME_OFFLINE: the resolved site's Pi is offline (not registered / stale)
+//   - 413  FTW_REMOTE_REQUEST_TOO_LARGE: request body over the control-body cap
+//   - 502  FTW_REMOTE_HOME_NO_RESPONSE: the tunnel RPC to the Pi failed (reservation released)
 //   - else the Pi's status, with Set-Cookie STRIPPED (the owner session cookie the Pi
 //     mints on a successful enroll must never traverse the relay)
 //
-// Every 403 above is byte-identical on purpose: an anonymous caller learns nothing
-// about whether a claim_key is malformed, dead, or racing another finish.
+// The dead/malformed/reserved claim_key cases intentionally share
+// FTW_BOOTSTRAP_NOT_LIVE so an anonymous caller still learns nothing about whether
+// a handle was syntactically wrong, expired, or racing another finish. Other gates
+// carry stable diagnostic codes for production support.
 func (r *Relay) bootstrapEnrollForward(which string) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		if r.Bootstrap == nil {
-			http.Error(w, "bootstrap store not configured", http.StatusServiceUnavailable)
+			writeRemoteError(w, req, http.StatusServiceUnavailable, errBootstrapStoreMissing,
+				"bootstrap store is not configured on the relay", "which", which)
 			return
 		}
 		// Bound a memory-flood on the un-spoofable source IP, the same throttle the
 		// unauthenticated claim endpoint uses.
 		if r.OfferLimit != nil && !r.OfferLimit.Allow(r.offerClientIP(req)) {
-			http.Error(w, "too many enroll attempts from your address", http.StatusTooManyRequests)
+			writeRemoteError(w, req, http.StatusTooManyRequests, errBootstrapRateLimited,
+				"too many setup attempts from this address; wait a moment and try again", "which", which)
 			return
 		}
 		// The relay gates on claim_key (high-entropy handle); the pin rides through to
@@ -260,7 +262,8 @@ func (r *Relay) bootstrapEnrollForward(which string) http.HandlerFunc {
 		// missing claim_key is the same 403 as a dead one (§ doc).
 		claimKey := req.URL.Query().Get("claim_key")
 		if claimKey == "" {
-			http.Error(w, "claim_key required", http.StatusForbidden)
+			writeRemoteError(w, req, http.StatusForbidden, errBootstrapClaimRequired,
+				"setup link is missing its secure handle; mint a fresh QR from local Access and scan/open the full https://home.fortytwowatts.com link", "which", which)
 			return
 		}
 		// Shape-gate the claim_key (= hex(sha256(bootstrap_id))) BEFORE the store
@@ -268,26 +271,30 @@ func (r *Relay) bootstrapEnrollForward(which string) http.HandlerFunc {
 		// anti-enumeration) so an attacker can't distinguish "wrong shape" from "no
 		// open window" from "wrong key".
 		if !isLowerHex64(claimKey) {
-			http.Error(w, "no live bootstrap for this claim_key", http.StatusForbidden)
+			writeRemoteError(w, req, http.StatusForbidden, errBootstrapNotLive,
+				"setup link is not live; mint a fresh QR from local Access", "which", which, "claim_key_shape", "invalid")
 			return
 		}
 		// Resolve the site WITHOUT burning: Claim is a read here. The window only
 		// closes on a successful finish (single-use), never on a probe.
 		_, site, ok := r.Bootstrap.Claim(claimKey)
 		if !ok || !r.Bootstrap.Live(site, claimKey) {
-			http.Error(w, "no live bootstrap for this claim_key", http.StatusForbidden)
+			writeRemoteError(w, req, http.StatusForbidden, errBootstrapNotLive,
+				"setup link is not live; mint a fresh QR from local Access", "which", which)
 			return
 		}
 		// Resolve the Pi's host_id. A site with an open enrollment window whose Pi
 		// has gone offline can't be enrolled against → 503.
 		hostID, registered, fresh := r.Owners.Active(site, homeStaleAfter)
 		if !registered || !fresh {
-			http.Error(w, "home offline", http.StatusServiceUnavailable)
+			writeRemoteError(w, req, http.StatusServiceUnavailable, errRemoteHomeOffline,
+				"home is not active on the relay right now; check that Remote Access is on locally", "which", which, "registered", registered, "fresh", fresh)
 			return
 		}
 		body, err := readBodyLimited(req.Body, maxControlBodyBytes)
 		if err != nil {
-			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			writeRemoteError(w, req, http.StatusRequestEntityTooLarge, errRemoteRequestTooLarge,
+				"setup request body is too large", "which", which)
 			return
 		}
 		// Preserve the browser's full query when forwarding, dropping ONLY the
@@ -310,7 +317,8 @@ func (r *Relay) bootstrapEnrollForward(which string) http.HandlerFunc {
 		// 200) left open. A start is a non-burning probe and never reserves.
 		if which == "finish" {
 			if _, ok := r.Bootstrap.Reserve(site, claimKey); !ok {
-				http.Error(w, "no live bootstrap for this claim_key", http.StatusForbidden)
+				writeRemoteError(w, req, http.StatusForbidden, errBootstrapNotLive,
+					"setup link is no longer live; mint a fresh QR from local Access", "which", which, "reserved", true)
 				return
 			}
 		}
@@ -322,7 +330,8 @@ func (r *Relay) bootstrapEnrollForward(which string) http.HandlerFunc {
 			if which == "finish" {
 				r.Bootstrap.Release(site, claimKey)
 			}
-			http.Error(w, "home did not answer", http.StatusBadGateway)
+			writeRemoteError(w, req, http.StatusBadGateway, errRemoteHomeNoResponse,
+				"home did not answer through the relay; check that Remote Access is on and the Pi is online", "which", which)
 			return
 		}
 		// Copy the Pi's response with the owner cookie stripped — the same chokepoint

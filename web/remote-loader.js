@@ -7,10 +7,13 @@ const ROUTE_COOKIE = "ftw_home_site";
 const DIRECTORY_CACHE_KEY = "ftw.directory";
 const P2P_SRC = "/p2p.js?v=p2p14";
 const AUTO_OPEN_KEY = "ftw.remote.auto_open.v2";
+const MANUAL_SIGNOUT_KEY = "ftw.owner.manual_signout.v1";
+const DEVICE_KEY_DB = "ftw-device-key";
 const AUTO_OPEN_WINDOW_MS = 10000;
 const IDENTITY_TIMEOUT_MS = 3000;
 
 const btn = document.getElementById("unlock");
+const resetBtn = document.getElementById("reset-browser");
 const statusEl = document.getElementById("status");
 const copyEl = document.getElementById("copy");
 
@@ -21,12 +24,18 @@ function say(text, cls) {
 
 function setBusy(on) {
   btn.disabled = !!on;
+  if (resetBtn) resetBtn.disabled = !!on;
 }
 
 function setRouteCookie(siteID) {
   const secure = location.protocol === "https:" ? "; Secure" : "";
   document.cookie = ROUTE_COOKIE + "=" + encodeURIComponent(siteID) +
     "; Path=/; Max-Age=2592000; SameSite=Lax" + secure;
+}
+
+function clearRouteCookie() {
+  const secure = location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = ROUTE_COOKIE + "=; Path=/; Max-Age=0; SameSite=Lax" + secure;
 }
 
 function routeCookieSite() {
@@ -73,6 +82,89 @@ function clearCachedDirectory() {
   } catch {
     /* non-fatal */
   }
+}
+
+function clearRemoteLocalStorage() {
+  try {
+    if (!window.localStorage) return;
+    const remove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+      if (k === DIRECTORY_CACHE_KEY ||
+          k === MANUAL_SIGNOUT_KEY ||
+          k === "ftw.p2p" ||
+          k.indexOf("ftw.identity:") === 0) {
+        remove.push(k);
+      }
+    }
+    for (const k of remove) localStorage.removeItem(k);
+  } catch {
+    /* non-fatal */
+  }
+}
+
+function clearRemoteSessionStorage() {
+  try {
+    if (!window.sessionStorage) return;
+    sessionStorage.removeItem(AUTO_OPEN_KEY);
+  } catch {
+    /* non-fatal */
+  }
+}
+
+function deleteIndexedDB(name) {
+  return new Promise((resolve) => {
+    if (!window.indexedDB || !indexedDB.deleteDatabase) {
+      resolve(false);
+      return;
+    }
+    let req;
+    try {
+      req = indexedDB.deleteDatabase(name);
+    } catch {
+      resolve(false);
+      return;
+    }
+    req.onsuccess = () => resolve(true);
+    req.onerror = () => resolve(false);
+    req.onblocked = () => resolve(false);
+  });
+}
+
+async function clearOriginCaches() {
+  try {
+    if (window.caches && caches.keys) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    }
+  } catch {
+    /* non-fatal */
+  }
+}
+
+async function unregisterServiceWorkers() {
+  try {
+    if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+  } catch {
+    /* non-fatal */
+  }
+}
+
+async function resetThisBrowser() {
+  setBusy(true);
+  say("Resetting this browser...");
+  clearRouteCookie();
+  clearRemoteLocalStorage();
+  clearRemoteSessionStorage();
+  await deleteIndexedDB(DEVICE_KEY_DB);
+  await clearOriginCaches();
+  await unregisterServiceWorkers();
+  say("Browser reset. Reloading...");
+  location.replace("/?reset_remote=1&reset_browser=" + Date.now());
 }
 
 function instanceList(dir) {
@@ -227,4 +319,16 @@ btn.addEventListener("click", async () => {
   }
 });
 
-boot();
+if (resetBtn) {
+  resetBtn.addEventListener("click", resetThisBrowser);
+}
+
+try {
+  if (new URLSearchParams(location.search).get("reset_browser") === "1") {
+    resetThisBrowser();
+  } else {
+    boot();
+  }
+} catch {
+  boot();
+}

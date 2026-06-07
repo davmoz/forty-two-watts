@@ -595,7 +595,8 @@ func (s *Server) enrollAllowed(r *http.Request) error {
 		if s.isTunneled(r) {
 			pin := r.URL.Query().Get("pin")
 			if pin == "" || !s.ownerAccess().validateEnrollPin(pin) {
-				return errors.New("first enrollment requires the LAN PIN")
+				return ownerAccessError(http.StatusForbidden, errEnrollPinRequired,
+					"first enrollment requires the 6-digit PIN shown next to the setup QR on your local network")
 			}
 			return nil
 		}
@@ -606,7 +607,8 @@ func (s *Server) enrollAllowed(r *http.Request) error {
 		if isLANClientSource(r) {
 			return nil
 		}
-		return errors.New("first enrollment must be performed on the local network")
+		return ownerAccessError(http.StatusForbidden, errEnrollLANRequired,
+			"first enrollment must be performed on the local network")
 	}
 	// Adding a further passkey to an already-enrolled Pi is owner-credential
 	// management: authorize with the strict manager (a real session, or genuine
@@ -616,7 +618,8 @@ func (s *Server) enrollAllowed(r *http.Request) error {
 	if _, ok := s.authorizeOwnerManage(r); ok {
 		return nil
 	}
-	return errors.New("enrollment requires an existing authenticated session")
+	return ownerAccessError(http.StatusForbidden, errEnrollSessionRequired,
+		"enrollment requires an existing authenticated session")
 }
 
 // handleOwnerEnrollPin mints (and returns) the LAN-first-enrollment PIN.
@@ -633,27 +636,33 @@ func (s *Server) handleOwnerEnrollPin(w http.ResponseWriter, r *http.Request) {
 	// originates from loopback) can never satisfy isLANClientSource and so can
 	// never extract the PIN.
 	if s.isTunneled(r) || !isLANClientSource(r) {
-		http.Error(w, "enrollment PIN is only available on the local network", http.StatusForbidden)
+		writeOwnerAccessError(w, r, http.StatusForbidden, errEnrollPinLANOnly,
+			"enrollment PIN is only available on the local network", "tunneled", s.isTunneled(r))
 		return
 	}
 	if !s.remoteAccessEnabled() {
-		http.Error(w, "remote access is off; enable it in Settings -> Access, save, and restart before creating a setup link", http.StatusConflict)
+		writeOwnerAccessError(w, r, http.StatusConflict, errRemoteAccessOff,
+			"remote access is off; enable it in Settings -> Access, save, and restart before creating a setup link")
 		return
 	}
 	if strings.TrimSpace(s.deps.RelayBaseURL) == "" {
-		http.Error(w, "remote access needs a service restart before setup links can be created", http.StatusConflict)
+		writeOwnerAccessError(w, r, http.StatusConflict, errRemoteRestartRequired,
+			"remote access needs a service restart before setup links can be created")
 		return
 	}
 	if devices, err := s.deps.State.LoadTrustedDevices(); err != nil {
-		http.Error(w, fmt.Sprintf("check trusted devices: %v", err), http.StatusInternalServerError)
+		writeOwnerAccessError(w, r, http.StatusInternalServerError, errTrustedDevicesRead,
+			fmt.Sprintf("check trusted devices: %v", err))
 		return
 	} else if len(devices) > 0 {
-		http.Error(w, "a passkey is already enrolled; sign in and add more passkeys from Access instead of using the first-setup QR", http.StatusConflict)
+		writeOwnerAccessError(w, r, http.StatusConflict, errFirstSetupClosed,
+			"a passkey is already enrolled; sign in and add more passkeys from Access instead of using the first-setup QR", "devices", len(devices))
 		return
 	}
 	pin, bootstrapID, expiresIn, err := s.ownerAccess().mintEnrollPin()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeOwnerAccessError(w, r, http.StatusInternalServerError, errEnrollPinMintFailed,
+			err.Error())
 		return
 	}
 	// Log only the PIN — the RAW bootstrap_id is a bearer secret and must not land
@@ -665,7 +674,8 @@ func (s *Server) handleOwnerEnrollPin(w http.ResponseWriter, r *http.Request) {
 	// races and produces a false "no live setup link". Setup is only useful once
 	// the relay has accepted the parked descriptor, so surface publish failure here.
 	if err := s.publishBootstrapDescriptor(bootstrapID); err != nil {
-		http.Error(w, "setup link unavailable: "+err.Error(), http.StatusBadGateway)
+		writeOwnerAccessError(w, r, http.StatusBadGateway, errBootstrapPublishFailed,
+			"setup link unavailable: "+err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -689,6 +699,11 @@ func (s *Server) remoteAccessEnabled() bool {
 
 func (s *Server) handleOwnerEnrollStart(w http.ResponseWriter, r *http.Request) {
 	if err := s.enrollAllowed(r); err != nil {
+		var oe ownerAccessHTTPError
+		if errors.As(err, &oe) {
+			writeOwnerAccessError(w, r, oe.status, oe.code, oe.msg, "tunneled", s.isTunneled(r))
+			return
+		}
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -789,7 +804,8 @@ func (s *Server) handleOwnerEnrollFinish(w http.ResponseWriter, r *http.Request)
 		oa.mu.Unlock()
 		expected := bootstrapEnrollProof(bid, tok, bodyBytes)
 		if proof == "" || bid == "" || subtle.ConstantTimeCompare([]byte(proof), []byte(expected)) != 1 {
-			http.Error(w, "bootstrap proof required", http.StatusForbidden)
+			writeOwnerAccessError(w, r, http.StatusForbidden, errBootstrapProofRequired,
+				"bootstrap proof required")
 			return
 		}
 		// (b) Re-check the zero-device window. Source-of-truth backstop for the
@@ -797,10 +813,12 @@ func (s *Server) handleOwnerEnrollFinish(w http.ResponseWriter, r *http.Request)
 		// zero-device window, but only the first to persist wins — any later
 		// tunneled finish sees a non-empty device set and is refused.
 		if devices, derr := s.deps.State.LoadTrustedDevices(); derr != nil {
-			http.Error(w, derr.Error(), http.StatusInternalServerError)
+			writeOwnerAccessError(w, r, http.StatusInternalServerError, errTrustedDevicesRead,
+				derr.Error())
 			return
 		} else if len(devices) > 0 {
-			http.Error(w, "enrollment window closed", http.StatusForbidden)
+			writeOwnerAccessError(w, r, http.StatusForbidden, errEnrollWindowClosed,
+				"enrollment window closed", "devices", len(devices))
 			return
 		}
 	}

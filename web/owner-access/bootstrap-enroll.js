@@ -92,6 +92,18 @@ export async function bootstrapProof(bootstrapId, ceremonyToken, bodyString) {
   return toHex(mac);
 }
 
+function codedError(code, message, status) {
+  const e = new Error(message);
+  e.code = code;
+  if (status) e.status = status;
+  return e;
+}
+
+function errorCodeFromText(text) {
+  const m = /^([A-Z0-9_]+):/.exec(String(text || ""));
+  return m ? m[1] : "";
+}
+
 // claimAndVerify POSTs {home}/bootstrap/claim {claim_key} and returns the
 // VERIFIED, parsed entry: { site_id, pi_pubkey, label, sig } merged with the
 // relay-reported site_id. It performs the verify-before-trust gate:
@@ -108,25 +120,29 @@ export async function claimAndVerify(homeBase, claimKey, fetchImpl) {
     body: JSON.stringify({ claim_key: claimKey }),
   });
   if (r.status === 404) {
-    throw new Error("This setup link is no longer live. Create a fresh setup QR from your local 42W Access screen. If a passkey was already enrolled, sign in first; the first setup link is single-use.");
+    throw codedError("FTW_BOOTSTRAP_NOT_LIVE", "This setup link is no longer live. Create a fresh setup QR from your local 42W Access screen. If a passkey was already enrolled, sign in first; the first setup link is single-use.", r.status);
   }
-  if (!r.ok) throw new Error("claim failed (" + r.status + ")");
+  if (!r.ok) {
+    const body = await r.text();
+    const code = (r.headers && r.headers.get && r.headers.get("X-FTW-Error-Code")) || errorCodeFromText(body) || "FTW_BOOTSTRAP_CLAIM_FAILED";
+    throw codedError(code, "claim failed (" + r.status + "): " + body, r.status);
+  }
   const { site_id, descriptor } = await r.json();
-  if (!site_id || !descriptor) throw new Error("relay returned an incomplete claim");
+  if (!site_id || !descriptor) throw codedError("FTW_BOOTSTRAP_CLAIM_INCOMPLETE", "relay returned an incomplete claim");
   let entry;
   try {
     entry = JSON.parse(descriptor);
   } catch {
-    throw new Error("relay returned a malformed descriptor");
+    throw codedError("FTW_BOOTSTRAP_DESCRIPTOR_MALFORMED", "relay returned a malformed descriptor");
   }
   // The relay stores the descriptor BLIND. Trust ONLY the Pi's signature over it.
   if (!(await verifyEntry(entry))) {
-    throw new Error("descriptor signature did not verify — refusing to trust the relay");
+    throw codedError("FTW_BOOTSTRAP_DESCRIPTOR_BAD_SIGNATURE", "descriptor signature did not verify — refusing to trust the relay");
   }
   // The relay-reported site_id must match the signed-over one (defence in depth:
   // verifyEntry already binds site_id into the signed message).
   if (entry.site_id !== site_id) {
-    throw new Error("descriptor site_id mismatch — refusing to trust the relay");
+    throw codedError("FTW_BOOTSTRAP_DESCRIPTOR_SITE_MISMATCH", "descriptor site_id mismatch — refusing to trust the relay");
   }
   return entry;
 }

@@ -111,15 +111,21 @@ describe("ceremony pages route owner calls through the shared strict ownerFetch"
     });
   }
 
-  it("public owner-access sign-in converges on the dashboard gate, not legacy login.html", () => {
-    assert.match(INDEX, /id="signin-link"/, "landing link must be addressable");
+	  it("public owner-access sign-in converges on the dashboard gate, not legacy login.html", () => {
+	    assert.match(INDEX, /id="signin-link"/, "landing link must be addressable");
     assert.match(INDEX, /const\s+onLan\s*=\s*isLanOrigin\(\)/,
       "public-vs-LAN must use origin detection, not apiBase()==='' which is true on home.*");
     assert.match(INDEX, /signinLink\.href\s*=\s*"\/"/,
       "public owner-access sign-in should route to the root gate");
     assert.match(LOGIN, /if\s*\(!isLanOrigin\(\)\)\s*\{\s*location\.replace\("\/"\)/,
       "direct public hits to legacy login.html should redirect to the root gate");
-  });
+	  });
+
+	  it("login.html renders support details for failed owner login RPCs", () => {
+	    assert.match(LOGIN, /X-FTW-Error-Code/);
+	    assert.match(LOGIN, /Support details/);
+	    assert.match(LOGIN, /P2P/);
+	  });
 
   it("owner-access signout sets the same local manual-signout guard as the dashboard", () => {
     assert.match(INDEX, /MANUAL_SIGNOUT_KEY\s*=\s*"ftw\.owner\.manual_signout\.v1"/);
