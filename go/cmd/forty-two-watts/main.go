@@ -550,7 +550,7 @@ func main() {
 				deps.HA = nil
 				slog.Info("HA bridge stopped (disabled in config)")
 			case haBridge == nil && haEnabled:
-				if bridge, err := ha.Start(newCfg.HomeAssistant, tel, ctrl, ctrlMu, reg.Names(), haCallbacks(ctrl, ctrlMu, st)); err != nil {
+				if bridge, err := ha.Start(newCfg.HomeAssistant, tel, ctrl, ctrlMu, reg.Names(), haCallbacks(ctrl, ctrlMu, st, mpcSvc)); err != nil {
 					slog.Warn("HA bridge start failed", "err", err)
 				} else {
 					haBridge = bridge
@@ -1735,7 +1735,7 @@ func main() {
 
 	// ---- HA MQTT bridge (optional) ----
 	if cfg.HomeAssistant != nil && cfg.HomeAssistant.Enabled {
-		bridge, err := ha.Start(cfg.HomeAssistant, tel, ctrl, ctrlMu, reg.Names(), haCallbacks(ctrl, ctrlMu, st))
+		bridge, err := ha.Start(cfg.HomeAssistant, tel, ctrl, ctrlMu, reg.Names(), haCallbacks(ctrl, ctrlMu, st, mpcSvc))
 		if err != nil {
 			slog.Warn("HA MQTT bridge failed to start", "err", err)
 		} else {
@@ -2806,17 +2806,38 @@ func restoreLatestMPCDiagnostic(st *state.Store, svc *mpc.Service, now time.Time
 // path can share the exact same wiring — drift between them would mean
 // HA commands behave one way after boot and a different way after a
 // hot-reload, which is the kind of silent skew that's hardest to debug.
-func haCallbacks(ctrl *control.State, ctrlMu *sync.Mutex, st *state.Store) ha.CommandCallbacks {
+func haCallbacks(ctrl *control.State, ctrlMu *sync.Mutex, st *state.Store, mpcSvc *mpc.Service) ha.CommandCallbacks {
 	return ha.CommandCallbacks{
 		SetMode: func(m string) error {
+			mode := control.Mode(m)
 			ctrlMu.Lock()
-			defer ctrlMu.Unlock()
-			switch control.Mode(m) {
+			switch mode {
 			case control.ModeIdle, control.ModeSelfConsumption, control.ModePeakShaving,
-				control.ModeCharge, control.ModePriority, control.ModeWeighted:
-				ctrl.Mode = control.Mode(m)
-				return st.SaveConfig("mode", m)
+				control.ModeCharge, control.ModePriority, control.ModeWeighted,
+				control.ModePlannerSelf, control.ModePlannerCheap,
+				control.ModePlannerPassiveArbitrage, control.ModePlannerArbitrage:
+				ctrl.Mode = mode
+				ctrlMu.Unlock()
+				if err := st.SaveConfig("mode", m); err != nil {
+					return err
+				}
+				if mode.IsPlannerMode() && mpcSvc != nil {
+					var mm mpc.Mode
+					switch mode {
+					case control.ModePlannerSelf:
+						mm = mpc.ModeSelfConsumption
+					case control.ModePlannerCheap:
+						mm = mpc.ModeCheapCharge
+					case control.ModePlannerPassiveArbitrage:
+						mm = mpc.ModePassiveArbitrage
+					case control.ModePlannerArbitrage:
+						mm = mpc.ModeArbitrage
+					}
+					mpcSvc.SetMode(context.Background(), mm)
+				}
+				return nil
 			}
+			ctrlMu.Unlock()
 			return fmt.Errorf("unknown mode: %s", m)
 		},
 		SetGridTarget: func(w float64) error {
