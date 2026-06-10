@@ -2847,6 +2847,7 @@ type surplusAccounting struct {
 	effectiveGridW      float64
 	currentBatteryW     float64
 	evReserveRemainingW float64
+	evActive            bool // EV is actually drawing current (not just plugged)
 }
 
 func newSurplusAccounting(rawGridW, effectiveGridW, currentBatteryW float64, state *State) surplusAccounting {
@@ -2855,6 +2856,7 @@ func newSurplusAccounting(rawGridW, effectiveGridW, currentBatteryW float64, sta
 		effectiveGridW:      effectiveGridW,
 		currentBatteryW:     currentBatteryW,
 		evReserveRemainingW: evReserveRemainingW(state),
+		evActive:            state != nil && state.EVChargingW > evActiveThresholdW,
 	}
 }
 
@@ -2898,7 +2900,19 @@ func (a surplusAccounting) effectiveChargeSurplusW() float64 {
 }
 
 func (a surplusAccounting) chargeCeilingAfterEVReserveW() float64 {
-	ceiling := a.effectiveChargeSurplusW() - a.evReserveRemainingW
+	surplus := a.effectiveChargeSurplusW()
+	// When the EV is NOT drawing and the available PV surplus is below the
+	// reserved amount, the EV cannot start on it: a plugged-but-stopped EV
+	// reserves its MinChargeW, so surplus < reserve means surplus is below
+	// the EV's start power and it can't begin charging no matter what. Left
+	// reserved, that surplus just exports to grid. Release it so the home
+	// battery absorbs the surplus instead. Once the EV is actually drawing
+	// (evActive) — or once surplus rises to the reserve so the EV CAN start —
+	// the reserve applies normally and protects the EV's slice.
+	if !a.evActive && surplus < a.evReserveRemainingW {
+		return surplus
+	}
+	ceiling := surplus - a.evReserveRemainingW
 	if ceiling < 0 {
 		return 0
 	}

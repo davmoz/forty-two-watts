@@ -5623,3 +5623,26 @@ func TestPlannerCheapIdleSlotStillBlocksReactiveDischarge(t *testing.T) {
 		}
 	}
 }
+
+// When the EV is plugged but NOT drawing and the available PV surplus is below
+// the reserved amount, the EV can't start on it — so the reserve is released to
+// the home battery instead of exported. Above the reserve (EV can start) and
+// while the EV is actively drawing, the reserve is protected. (Stefan 2026-06-10:
+// 1.5kW surplus was exporting while a 3φ EV that needs 4.14kW sat idle.)
+func TestChargeCeilingReleasesReserveWhenEVCannotStart(t *testing.T) {
+	// not drawing, surplus 1500 < reserve 4140 → release full surplus to battery
+	a := surplusAccounting{rawGridW: -1500, effectiveGridW: -1500, currentBatteryW: 0, evReserveRemainingW: 4140, evActive: false}
+	if got := a.chargeCeilingAfterEVReserveW(); got != 1500 {
+		t.Errorf("ceiling=%.0f, want 1500 (release reserve — EV can't start on sub-min surplus)", got)
+	}
+	// not drawing, surplus 5000 >= reserve 4140 → EV can start, reserve protected
+	a2 := surplusAccounting{rawGridW: -5000, effectiveGridW: -5000, currentBatteryW: 0, evReserveRemainingW: 4140, evActive: false}
+	if got := a2.chargeCeilingAfterEVReserveW(); got != 860 {
+		t.Errorf("ceiling=%.0f, want 860 (5000-4140, reserve protects EV start)", got)
+	}
+	// EV actively drawing, surplus 1000 < remaining 2000 → keep reserve (don't steal)
+	a3 := surplusAccounting{rawGridW: -1000, effectiveGridW: -1000, currentBatteryW: 0, evReserveRemainingW: 2000, evActive: true}
+	if got := a3.chargeCeilingAfterEVReserveW(); got != 0 {
+		t.Errorf("ceiling=%.0f, want 0 (EV drawing — protect its ramp reserve)", got)
+	}
+}
