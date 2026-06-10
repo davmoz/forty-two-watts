@@ -1931,19 +1931,18 @@ func ComputeDispatch(
 				if targetTotal2 > ceiling {
 					totalCorrection = ceiling - currentTotal
 				}
-			} else if targetTotal2 < 0 && gridW <= 0 {
-				// No-discharge floor: the EV reserve must only REDUCE
-				// battery charging to free surplus — never push the
-				// battery into discharge to manufacture the reserved
-				// export. When PV is below the reserve, the within-reserve
-				// grid bias (biasedGridW=0 in the −reserve..0 band) makes
-				// the PI want to discharge toward the export target; left
-				// unchecked it drains the pack to grid (observed on
-				// Stefan's site: a plugged EV reserved 4.14 kW while PV was
-				// 1.7 kW → battery discharged ~4 kW to grid, and the EV
-				// still couldn't start). Floor at idle while the grid is
-				// exporting/balanced. Household-import load coverage
-				// (gridW > 0) is intentionally left untouched.
+			} else if surplus.evCanUseReserve() && targetTotal2 < 0 && gridW <= 0 {
+				// No-discharge floor: when the reserve is actively held for
+				// the EV, the bias (biasedGridW=0 in the −reserve..0 band)
+				// makes the PI want to discharge toward the export target;
+				// left unchecked it drains the pack to grid (observed: a
+				// plugged EV reserved 4.14 kW while PV was 1.7 kW → battery
+				// discharged ~4 kW to grid). Floor at idle while exporting/
+				// balanced. Gated on evCanUseReserve so this fires ONLY when
+				// the bias is active (same condition) — when the EV can't use
+				// the reserve the bias is released and the battery must be
+				// free to discharge for normal load coverage. Household-import
+				// coverage (gridW > 0) is always left untouched.
 				totalCorrection = -currentTotal
 			}
 		}
