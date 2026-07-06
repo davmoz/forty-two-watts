@@ -80,6 +80,12 @@ local rated_power_w = 0
 -- fuse / grid subscription, not the battery's max charge rate. Overridable
 -- via config.max_grid_charge_a; default 31 A matches Zap's init profile.
 local grid_charge_current_a = 31
+-- SoC targets written to reg 166. Charge commands aim for soc_max,
+-- discharge commands floor at soc_min. Defaults match Zap; overridable
+-- via config.soc_max / config.soc_min. Declared before driver_init so the
+-- config overrides land in these locals, not stray globals.
+local soc_max = 100
+local soc_min = 20
 
 ----------------------------------------------------------------------------
 -- Initialization
@@ -439,12 +445,6 @@ local REG_BATTERY_VOLTAGE    = 587
 
 local EMS_LOAD_FIRST  = 1  -- native self-consumption, battery tops up load
 local EMS_EXTERNAL    = 3  -- forced setpoints via reg 108/154
-
--- SoC targets written to reg 166. Charge commands aim for soc_max,
--- discharge commands floor at soc_min. Defaults match Zap; overridable
--- via config.soc_max / config.soc_min.
-local soc_max = 100
-local soc_min = 20
 
 local CHARGE_CURRENT_DEFAULT_A = 31  -- matches Zap init profile
 
