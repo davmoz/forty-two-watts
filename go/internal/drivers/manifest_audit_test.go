@@ -25,6 +25,7 @@ var validRoles = map[string]bool{
 var validProvidesPrefix = map[string]bool{
 	"battery": true, "meter": true, "pv": true,
 	"ev": true, "vehicle": true, "inverter": true,
+	"v2x_charger": true,
 }
 
 func auditCatalog(t *testing.T) []CatalogEntry {
@@ -205,6 +206,11 @@ func configKeysReadBy(src string) map[string]bool {
 var undeclaredKeyExceptions = map[string]map[string]string{
 	"ferroamp": {
 		"eso_capacity_kwh": "map of ESO id → kWh; the manifest field schema has no table type yet",
+	},
+	"myuplink": {
+		"refresh_token":  "written by the OAuth connect flow (and rotated via host.persist_secret) — never operator-entered, so no form field",
+		"base_url":       "test-only override; production is pinned to api.myuplink.com",
+		"setup_retry_ms": "test-only override for the retry backoff",
 	},
 }
 

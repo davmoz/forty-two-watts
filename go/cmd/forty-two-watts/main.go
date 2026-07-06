@@ -325,6 +325,25 @@ func main() {
 	cfgMu := &sync.RWMutex{}
 	modelsMu := &sync.Mutex{}
 
+	// Durable secret write-back for drivers (rotated OAuth refresh tokens).
+	// Drivers call host.persist_secret(key, value); the registry routes it
+	// here with the driver's name. We write to the state KV store — NOT
+	// config.yaml — on purpose: config.yaml is watched by configreload, and
+	// rewriting it on every token rotation would restart the driver, which
+	// re-auths, rotates again, and loops. SecretOverride then layers these
+	// KV values back over config.yaml at driver_init, so the freshest token
+	// always reaches the driver while config.yaml keeps the bootstrap seed
+	// the UI renders as "saved".
+	driverSecretKey := func(driverName, key string) string {
+		return "driver_secret:" + driverName + ":" + key
+	}
+	reg.SecretPersister = func(driverName, key, value string) error {
+		return st.SaveConfig(driverSecretKey(driverName, key), value)
+	}
+	reg.SecretOverride = func(driverName, key string) (string, bool) {
+		return st.LoadConfig(driverSecretKey(driverName, key))
+	}
+
 	// Pre-declare services that the hot-reload Applier needs to touch.
 	// The Applier closure captures these by reference; they're assigned
 	// further down when their packages are wired, and the Applier only
@@ -1142,6 +1161,51 @@ func main() {
 			}
 			return ctrl.FuseEVMaxW, true
 		})
+		// Persist operator manual holds (the amp-slider "Start") so they
+		// survive reboot / firmware update and the EV keeps charging across
+		// the restart — the in-memory hold would otherwise be lost (Stefan
+		// 2026-06-11: a binary deploy dropped the live manual charge). Mirrors
+		// the loadpoint_schedule k/v pattern: one row per LP keyed
+		// `loadpoint_manual_hold:<id>`, "{}" = cleared.
+		const lpManualHoldKeyPrefix = "loadpoint_manual_hold:"
+		// Restore FIRST (before wiring the saver) so re-applying a persisted
+		// hold doesn't immediately re-write what we just read. A stale hold
+		// for a car unplugged during downtime self-clears on the first tick
+		// (tickOne unplug → ClearManualHold).
+		for _, lpState := range lpMgr.States() {
+			v, ok := st.LoadConfig(lpManualHoldKeyPrefix + lpState.ID)
+			if !ok || v == "" || v == "{}" {
+				continue
+			}
+			var h loadpoint.ManualHold
+			if err := json.Unmarshal([]byte(v), &h); err != nil {
+				slog.Warn("failed to parse persisted manual hold", "lp", lpState.ID, "err", err)
+				continue
+			}
+			if !h.Persistent {
+				continue // only operator (never-expiring) holds persist
+			}
+			lpController.SetManualHold(lpState.ID, h)
+			slog.Info("restored persistent manual hold across restart",
+				"lp", lpState.ID, "power_w", h.PowerW, "phase_mode", h.PhaseMode)
+		}
+		lpController.SetManualHoldSaver(func(id string, h loadpoint.ManualHold, cleared bool) {
+			key := lpManualHoldKeyPrefix + id
+			if cleared {
+				if err := st.SaveConfig(key, "{}"); err != nil {
+					slog.Warn("failed to clear persisted manual hold", "lp", id, "err", err)
+				}
+				return
+			}
+			b, err := json.Marshal(h)
+			if err != nil {
+				slog.Warn("failed to marshal manual hold", "lp", id, "err", err)
+				return
+			}
+			if err := st.SaveConfig(key, string(b)); err != nil {
+				slog.Warn("failed to persist manual hold", "lp", id, "err", err)
+			}
+		})
 		// Wire the live per-phase site-meter current reader. The control
 		// package's fuse guard is site-TOTAL only (sum across phases);
 		// a single phase can still trip from house-load imbalance (e.g.
@@ -1948,6 +2012,30 @@ func main() {
 			lpMgr.RollSchedules(time.Now().UTC())
 			lpController.Tick(ctx, time.Now())
 
+			// Anchor each plugged-in loadpoint's inferred SoC to the live
+			// vehicle BMS reading when one is paired. Chargers like Easee
+			// can't read the car, so the manager otherwise drifts on a
+			// plug-in-anchor + delivered-Wh estimate; when a vehicle driver
+			// (TeslaBLEProxy etc.) is online and matched, its SoC is ground
+			// truth. Runs after Tick's Observe so the per-tick re-anchor
+			// wins over that tick's inference. Same picker the MPC spec and
+			// api.go's loadpoint decoration use, so all three agree on which
+			// vehicle is "the one"; we additionally require !Stale so a
+			// driver serving last-known cache (car asleep) can't pin the
+			// dashboard to a stale value — inference takes over until fresh
+			// BMS data returns.
+			for _, st := range lpMgr.States() {
+				if !st.PluggedIn {
+					continue
+				}
+				delivering := st.CurrentPowerW > loadpoint.DeliveringW
+				pick := telemetry.PickBestVehicleForLoadpoint(tel, delivering, time.Now())
+				if pick.Driver == "" || pick.Stale {
+					continue
+				}
+				lpMgr.AnchorVehicleSoC(st.ID, pick.SoCPct)
+			}
+
 			// ---- Safety: site meter stale → idle everything this cycle ----
 			// Otherwise stale grid readings cause one battery to charge another.
 			// Only meaningful when a site meter is actually configured;
@@ -2007,7 +2095,17 @@ func main() {
 			var wakeKickActiveIDs map[string]bool
 			if lpController != nil {
 				now := time.Now()
-				for _, st := range lpStatesSnapshot {
+				for i := range lpStatesSnapshot {
+					st := &lpStatesSnapshot[i]
+					// Populate ManualActive on the dispatch-path snapshot
+					// (lpMgr.States() doesn't set it — only the API does) so
+					// SurplusReserveW can drop the reserve for a force-charging
+					// LP. Without this the manual/schedule override in
+					// SurplusReserveW never sees a manual hold and the
+					// no-discharge floor flaps the battery support.
+					if _, ok := lpController.GetManualHold(st.ID, now); ok {
+						st.ManualActive = true
+					}
 					if !st.PluggedIn || !st.SurplusOnly {
 						continue
 					}
@@ -2052,6 +2150,7 @@ func main() {
 				pvW := troubleshootingSumOnlineW(tel, telemetry.DerPV)
 				batW := troubleshootingSumOnlineW(tel, telemetry.DerBattery)
 				evW := tel.SumOnlineEVW()
+				v2xW := tel.SumOnlineV2XW()
 				attrs := []any{
 					"mode", ctrl.Mode,
 					"plan_stale", planMissingNow,
@@ -2061,6 +2160,7 @@ func main() {
 					"pv_w", pvW,
 					"bat_w", batW,
 					"ev_w", evW,
+					"v2x_w", v2xW,
 					"self_tune_active", selfTuneActive,
 					"self_tune_driver", selfTuneName,
 					"self_tune_command_w", selfTuneCmd,
@@ -2068,7 +2168,7 @@ func main() {
 					"final_targets", finalTargets,
 				}
 				if haveGrid {
-					attrs = append(attrs, "load_w", gridW-batW-pvW-evW)
+					attrs = append(attrs, "load_w", gridW-batW-pvW-evW-v2xW)
 				}
 				slog.Info("troubleshooting: dispatch decision", attrs...)
 			}
@@ -2762,7 +2862,8 @@ func recordHistory(st *state.Store, tel *telemetry.Store, ctrl *control.State, n
 		avgSoC = sumSoC / float64(socCount)
 	}
 	evW := tel.SumOnlineEVW()
-	loadW := gridW - batW - pvW - evW
+	v2xW := tel.SumOnlineV2XW()
+	loadW := gridW - batW - pvW - evW - v2xW
 	if loadW < 0 {
 		loadW = 0
 	}
@@ -2793,6 +2894,12 @@ func recordHistory(st *state.Store, tel *telemetry.Store, ctrl *control.State, n
 		if r := tel.Get(name, telemetry.DerEV); r != nil {
 			row["ev_w"] = r.SmoothedW
 		}
+		if r := tel.Get(name, telemetry.DerV2X); r != nil {
+			row["v2x_w"] = r.SmoothedW
+			if r.SoC != nil {
+				row["v2x_vehicle_soc"] = *r.SoC
+			}
+		}
 		_ = h
 		perDriver[name] = row
 	}
@@ -2804,6 +2911,7 @@ func recordHistory(st *state.Store, tel *telemetry.Store, ctrl *control.State, n
 		"drivers":      perDriver,
 		"targets":      targets,
 		"ev_w":         evW,
+		"v2x_w":        v2xW,
 		"load_house_w": loadW,
 	})
 	if err := st.RecordHistory(state.HistoryPoint{
@@ -2892,11 +3000,7 @@ func haCallbacks(ctx context.Context, ctrl *control.State, ctrlMu *sync.Mutex, s
 		SetEVCharging: func(w float64, active bool) error {
 			ctrlMu.Lock()
 			defer ctrlMu.Unlock()
-			if active {
-				ctrl.EVChargingW = w
-			} else {
-				ctrl.EVChargingW = 0
-			}
+			ctrl.SetManualEVCharging(w, active)
 			return nil
 		},
 		SetBatteryCoversEV: func(enabled bool) error {

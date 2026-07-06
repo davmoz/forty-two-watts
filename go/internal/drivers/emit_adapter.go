@@ -12,6 +12,7 @@ package drivers
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // canonicalWKey returns which canonical power key applies per event.
@@ -185,7 +186,7 @@ func (h *HostEnv) adaptMPPTs(m map[string]any) {
 			if !ok {
 				continue
 			}
-			_ = h.emitMetric(fmt.Sprintf("pv_mppt%d_%s", i+1, suffix), val)
+			_ = h.emitMetric(fmt.Sprintf("pv_mppt%d_%s", i+1, suffix), val, canon)
 			legacy := fmt.Sprintf("mppt%d_%s", i+1, suffix)
 			if _, exists := m[legacy]; !exists {
 				m[legacy] = val
@@ -203,7 +204,7 @@ func (h *HostEnv) emitInverter(m map[string]any) error {
 		if !ok {
 			continue
 		}
-		if err := h.emitMetric(metric, v); err != nil {
+		if err := h.emitMetric(metric, v, inverterMetricUnit(key)); err != nil {
 			return err
 		}
 		if key == "rated_W" && v > 0 {
@@ -211,6 +212,25 @@ func (h *HostEnv) emitInverter(m map[string]any) error {
 		}
 	}
 	return nil
+}
+
+// inverterMetricUnit derives the display unit from a canonical inverter
+// emit key's suffix (ac_W → W, L1_V → V, heatsink_C → °C, …).
+func inverterMetricUnit(key string) string {
+	switch {
+	case key == "VA":
+		return "VA"
+	case key == "Hz":
+		return "Hz"
+	case strings.HasSuffix(key, "_C"):
+		return "°C"
+	case strings.HasSuffix(key, "_V"):
+		return "V"
+	case strings.HasSuffix(key, "_A"):
+		return "A"
+	default: // ac_W, W, rated_W, available_*_W
+		return "W"
+	}
 }
 
 // logUnknownEmitKeys debug-logs keys outside the known vocabulary, once

@@ -236,12 +236,18 @@ For scalar diagnostics that don't fit the structured shape —
 temperatures, DC-link voltages, status codes, vendor counters — use:
 
 ```lua
-host.emit_metric("inverter_temp_c", 42.3)
-host.emit_metric("grid_hz",         50.01)
+host.emit_metric("inverter_temp_c", 42.3, "°C")
+host.emit_metric("battery_dc_v",    48.7, "V")
+host.emit_metric("grid_hz",         50.01)         -- unit optional
 ```
 
-Naming: snake_case with a unit suffix. These land in the long-format
-TSDB, queryable for life.
+Naming convention: snake_case with a unit suffix. The optional 3rd
+argument is a display unit (`"°C"`, `"Hz"`, `"kW"`, …) carried into the
+live snapshot so the UI can group + label the metric (e.g. the heat-pump
+detail drill-in groups by unit class). These land in the long-format
+TSDB where the UI charts them on demand. There's no allow-list — pick a
+stable name and keep using it. Emitting a metric also counts as a driver
+health success (a metric-only driver stays online).
 
 ## 4. Sign convention
 
@@ -275,7 +281,12 @@ Blixt-core surface (a registry driver runs unmodified on both hosts):
 ftw superset (use freely in ftw-only drivers; avoid in drivers meant
 for the shared registry): `set_poll_interval`,
 `set_watchdog_timeout_s`, `emit_metric`, `json_encode/json_decode`,
-MQTT (`mqtt_subscribe/mqtt_publish/mqtt_messages`), HTTP
+`persist_secret(key, value)` (durably store a provider-rotated secret
+— e.g. an OAuth `refresh_token` — in the unwatched state KV; layered
+back over `config.<key>` at next `driver_init`; operator-entered
+credentials stay in `config.<key>` with `secret = true` in the
+manifest, never write those back), MQTT
+(`mqtt_subscribe/mqtt_publish/mqtt_messages`), HTTP
 (`http_get/http_post`, allowlisted hosts), WebSocket
 (`ws_open/ws_send/ws_messages/ws_is_open/ws_close`), raw TCP
 (`tcp_open/tcp_recv/tcp_is_open/tcp_close`).

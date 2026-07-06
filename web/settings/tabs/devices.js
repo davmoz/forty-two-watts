@@ -210,6 +210,9 @@
         // Device settings — generated from the driver's DRIVER_MANIFEST
         // requires/options schema. Filled by the after() pass once the
         // catalog (or the registry manifest for pinned refs) resolves.
+        // Special affordances (Tesla verify, EV cloud connect, MyUplink
+        // OAuth connect) are layered onto the manifest form by
+        // fillManifestSlot.
         html += '<div class="drv-mf-slot" data-driver-idx="' + idx + '"></div>';
         html += '<div class="driver-test-panel">' +
           '<button class="btn-add driver-test-btn" type="button" data-driver-idx="' + idx + '">Test connection</button>' +
@@ -352,13 +355,23 @@
         var names = manifestFieldNames(manifest);
         var isVehicle = MF.emits(manifest, "vehicle");
         var isCloudEV = names.indexOf("email") >= 0 && names.indexOf("password") >= 0;
+        // OAuth authorization-code drivers (e.g. MyUplink) declare
+        // client_id + client_secret; the refresh_token is managed by the
+        // Connect flow (persisted server-side), never a manifest field.
+        var isOAuth = names.indexOf("client_id") >= 0 && names.indexOf("client_secret") >= 0;
         var html = "";
         var fieldsHTML = MF.renderFields(manifest, d.config || {}, {
           telemetryOnly: !!d.telemetry_only,
           secretSaved: secretSavedFn(d),
         });
+        if (isOAuth) {
+          html += myuplinkSetupHTML(d);
+        }
         if (fieldsHTML) {
           html += '<div class="mf-eyebrow">Device settings</div>' + fieldsHTML;
+        }
+        if (isOAuth) {
+          html += myuplinkConnectHTML(d, idx);
         }
         if (isVehicle) {
           html += '<div style="margin-top:8px;display:flex;gap:10px;align-items:center">' +
@@ -373,7 +386,7 @@
             '</div>';
         }
         slot.innerHTML = html;
-        if (!fieldsHTML && !isVehicle && !isCloudEV) return;
+        if (!fieldsHTML && !isVehicle && !isCloudEV && !isOAuth) return;
 
         if (!d.config) d.config = {};
         S._deviceForms[idx] = MF.wire(slot, manifest, d.config, {
@@ -383,6 +396,106 @@
 
         if (isVehicle) wireVehicleAffordance(slot, d, idx);
         if (isCloudEV) wireCloudConnect(slot, d, idx);
+        if (isOAuth) wireMyUplinkConnect(slot, d, idx);
+      }
+
+      // OAuth authorization-code setup (MyUplink): numbered steps + the
+      // exact Callback URL above the manifest fields (client_id /
+      // client_secret render from the manifest with the portal's labels
+      // via their help text).
+      function myuplinkSetupHTML(d) {
+        var callbackURL = location.origin + '/api/oauth/myuplink/callback';
+        return '<div class="mf-eyebrow">MyUplink connection</div>' +
+          '<ol style="color:var(--fg-muted);font-size:0.78rem;line-height:1.6;margin:0 0 12px;padding-left:1.2em">' +
+          '<li>Open the <a href="https://dev.myuplink.com/apps" target="_blank" rel="noopener" style="color:var(--accent-e)">MyUplink developer portal</a> → <b>Apps</b> → <b>Create new app</b>.</li>' +
+          '<li>Set <b>Callback Url</b> to the address shown below (copy it exactly).</li>' +
+          '<li>Copy the app\'s <b>Client Identifier</b> and <b>Client Secret</b> into the matching fields below.</li>' +
+          '<li><b>Save</b> these settings, then click <b>Connect to MyUplink</b> and sign in.</li>' +
+          '</ol>' +
+          '<div class="mf-field"><label>Callback URL ' + help('Paste this exact string into the "Callback Url" field of your MyUplink app. It must match the address you use to reach 42-watts.') + '</label>' +
+          '<input type="text" class="myuplink-callback-url" value="' + escHtml(callbackURL) + '" readonly onclick="this.select()" style="font-family:var(--mono);font-size:0.8rem"></div>';
+      }
+
+      // Connect button + connected badge + manual-URL fallback, rendered
+      // below the manifest fields. refresh_token is written server-side by
+      // the consent flow (a masked non-empty value round-trips = connected).
+      function myuplinkConnectHTML(d, idx) {
+        var acfg = d.config || {};
+        var connected = typeof acfg.refresh_token === 'string' && acfg.refresh_token !== '';
+        var connBadge = connected
+          ? '<span class="creds-badge creds-saved">✓ Connected</span>'
+          : '<span class="creds-badge creds-missing">⚠ Not connected</span>';
+        return '<div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
+          '<button class="btn-add myuplink-connect-btn" type="button" data-driver-idx="' + idx + '" data-driver-name="' + escHtml(d.name || '') + '">Connect to MyUplink</button>' +
+          connBadge +
+          '<span class="myuplink-connect-status" data-driver-idx="' + idx + '" style="font-size:0.82rem;color:var(--fg-muted)"></span>' +
+          '</div>' +
+          // Manual fallback: when the automatic redirect can't reach this
+          // device (remote/relay access, or the portal rejected an http LAN
+          // callback), the operator copies the redirected URL from the
+          // address bar and pastes it here. The Pi exchanges the code over
+          // its own outbound HTTPS, so no inbound callback is needed.
+          '<details style="margin-top:10px">' +
+          '<summary style="cursor:pointer;font-size:0.8rem;color:var(--fg-muted)">Not redirected back? Paste the URL instead</summary>' +
+          '<p style="color:var(--fg-muted);font-size:0.72rem;margin:6px 0">After signing in at MyUplink, copy the full address from your browser\'s address bar and paste it here. Use this for remote/relay access or if the page didn\'t return to 42-watts.</p>' +
+          '<input type="text" class="myuplink-manual-url" data-driver-idx="' + idx + '" placeholder=".../api/oauth/myuplink/callback?code=...&amp;state=..." style="font-family:var(--mono);font-size:0.78rem">' +
+          '<button class="btn-add myuplink-manual-btn" type="button" data-driver-idx="' + idx + '" style="margin-top:6px">Complete connection</button>' +
+          '</details>';
+      }
+
+      // Wire the Connect + manual-exchange buttons for one driver's slot.
+      // Slot-scoped (not a bodyEl sweep): manifest slots fill async after
+      // the tab's synchronous handler pass has already run.
+      function wireMyUplinkConnect(slot, d, idx) {
+        var cbtn = slot.querySelector(".myuplink-connect-btn");
+        var statusEl = slot.querySelector(".myuplink-connect-status");
+        function setStatus(msg, color) {
+          if (statusEl) { statusEl.textContent = msg; statusEl.style.color = color || "var(--fg-muted)"; }
+        }
+        if (cbtn) cbtn.addEventListener("click", function () {
+          var name = cbtn.dataset.driverName || "";
+          if (!name) { setStatus("Save the driver name first", "var(--red-e)"); return; }
+          setStatus("Opening MyUplink…");
+          cbtn.disabled = true;
+          var redirectURI = location.origin + "/api/oauth/myuplink/callback";
+          var qs = "?driver=" + encodeURIComponent(name) +
+            "&redirect_uri=" + encodeURIComponent(redirectURI);
+          ownerFetch("/api/oauth/myuplink/start" + qs)
+            .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+            .then(function (res) {
+              if (!res.ok || !res.body || !res.body.authorize_url) {
+                setStatus("✗ " + ((res.body && res.body.error) || "could not start consent — save Client ID + Secret first"), "var(--red-e)");
+                return;
+              }
+              window.open(res.body.authorize_url, "_blank");
+              setStatus("Complete the consent in the new tab. If it returns here, reload; if not, paste the URL below.", "var(--green-e)");
+            })
+            .catch(function (e) { setStatus("✗ " + e.message, "var(--red-e)"); })
+            .finally(function () { cbtn.disabled = false; });
+        });
+        var mbtn = slot.querySelector(".myuplink-manual-btn");
+        if (mbtn) mbtn.addEventListener("click", function () {
+          var input = slot.querySelector(".myuplink-manual-url");
+          var url = input ? input.value.trim() : "";
+          if (!url) { setStatus("Paste the redirect URL first", "var(--red-e)"); return; }
+          setStatus("Completing…");
+          mbtn.disabled = true;
+          ownerFetch("/api/oauth/myuplink/exchange", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ redirect_url: url }),
+          })
+            .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+            .then(function (res) {
+              if (res.ok && res.body && res.body.status === "connected") {
+                setStatus("✓ Connected — reload to refresh the badge.", "var(--green-e)");
+              } else {
+                setStatus("✗ " + ((res.body && res.body.error) || "exchange failed"), "var(--red-e)");
+              }
+            })
+            .catch(function (e) { setStatus("✗ " + e.message, "var(--red-e)"); })
+            .finally(function () { mbtn.disabled = false; });
+        });
       }
 
       // Raw key/value fallback for drivers with an unparseable or
@@ -785,6 +898,10 @@
           if (form) form.setTelemetryOnly(cb.checked);
         });
       });
+
+      // MyUplink OAuth Connect + manual-exchange handlers are wired
+      // per-slot in wireMyUplinkConnect (manifest slots fill async, after
+      // this synchronous handler pass).
 
       // Generic driver probe. Runs the current row's unsaved config through a
       // short-lived backend driver instance and dumps live readings/metrics

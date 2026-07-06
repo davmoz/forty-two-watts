@@ -35,6 +35,16 @@ type Registry struct {
 	// cache). Nil means registry refs are unsupported: a driver
 	// configured with `driver:` is refused with a clear error.
 	ResolveDriverRef func(ref string) (path string, err error)
+	// SecretPersister, when set, durably stores a driver secret (keyed by
+	// driver name + key) in the unwatched state KV. Wired by main.go.
+	// Optional — when nil, host.persist_secret returns an error and the
+	// driver degrades (an OAuth driver re-uses its last in-memory token).
+	SecretPersister func(driverName, key, value string) error
+	// SecretOverride, when set, returns a durably-persisted secret for a
+	// driver (the counterpart to SecretPersister). Applied over the
+	// config.yaml value at driver_init so a rotated token survives a
+	// restart. Returns ("", false) when no override exists.
+	SecretOverride func(driverName, key string) (string, bool)
 
 	mu  sync.Mutex
 	rec map[string]*runningDriver
@@ -183,6 +193,17 @@ func (r *Registry) Add(ctx context.Context, cfg config.Driver) error {
 		env.setPollInterval(int32(man.PollIntervalMS))
 	}
 	env.BatteryCapacityWh = cfg.BatteryCapacityWh
+	// Wire durable secret write-back (rotated OAuth tokens). The closure
+	// reads r.SecretPersister lazily at call time so main.go may set it
+	// either before or after the initial Add loop; persists only ever
+	// happen at runtime poll, long after wiring completes.
+	driverName := cfg.Name
+	env.PersistSecret = func(key, value string) error {
+		if r.SecretPersister == nil {
+			return fmt.Errorf("persist_secret: not supported on this host")
+		}
+		return r.SecretPersister(driverName, key, value)
+	}
 	if mq := cfg.EffectiveMQTT(); mq != nil && r.MQTTFactory != nil {
 		cap, err := r.MQTTFactory(cfg.Name, mq)
 		if err != nil {
@@ -249,9 +270,27 @@ func (r *Registry) Add(ctx context.Context, cfg config.Driver) error {
 	troubleshootingMode := r.troubleshootingMode
 	r.mu.Unlock()
 
-	// Pass the driver's config map (manifest defaults applied) as JSON
-	// to driver_init, with reserved host-level keys injected only at
-	// runtime.
+	// Layer any durably-persisted secret overrides (e.g. a rotated OAuth
+	// refresh_token from the unwatched state KV) over the manifest-
+	// defaulted config values, for driver_init only. rd.cfg below keeps
+	// the ORIGINAL cfg so the config-watcher's sameDriverConfig
+	// comparison stays stable — a rotated token must never look like an
+	// operator edit (that would trigger a restart→re-auth→rotate loop).
+	if r.SecretOverride != nil && len(initConfig) > 0 {
+		merged := make(map[string]any, len(initConfig))
+		for k, v := range initConfig {
+			if ov, ok := r.SecretOverride(cfg.Name, k); ok {
+				merged[k] = ov
+			} else {
+				merged[k] = v
+			}
+		}
+		initConfig = merged
+	}
+
+	// Pass the driver's config map (manifest defaults applied, secret
+	// overrides layered) as JSON to driver_init, with reserved host-level
+	// keys injected only at runtime.
 	initCfg := driverInitConfigJSON(initConfig, troubleshootingMode)
 	if err := drv.Init(ctx, initCfg); err != nil {
 		drv.Cleanup(ctx)

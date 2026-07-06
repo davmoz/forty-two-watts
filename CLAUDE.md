@@ -187,7 +187,11 @@ global exposes:
 - `host.emit("battery"|"pv"|"meter"|"inverter", {…})` — structured
   telemetry; canonical blixt keys (dc_W/ac_W/SoC_nom_fract/mppts[])
   accepted alongside legacy snake_case
-- `host.emit_metric(name, value)` — arbitrary scalar diagnostics into TS DB
+- `host.emit_metric(name, value [, unit])` — arbitrary scalar diagnostics into
+  TS DB; optional display unit feeds UI grouping/labels + counts as a health tick
+- `host.persist_secret(key, value)` — durably store a rotated secret (e.g. an
+  OAuth refresh_token) in the unwatched state KV; layered back over
+  `config.<key>` at next init via the registry's `SecretOverride`
 - `host.mqtt_sub/pub/messages`, `host.modbus_read/write/write_multi`
   (+ blixt aliases `host.write`, `host.write_registers`)
 - `host.decode_u32_le/be`, `host.decode_i32_le/be`, `host.decode_i16`,
