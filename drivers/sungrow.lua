@@ -220,31 +220,24 @@ function driver_poll()
     end
 
     host.emit("pv", {
-        w           = -pv_w,  -- negative = generation (EMS convention)
-        mppt1_v     = mppt1_v,
-        mppt1_a     = mppt1_a,
-        mppt2_v     = mppt2_v,
-        mppt2_a     = mppt2_a,
-        mppt1_w     = mppt1_w,
-        mppt2_w     = mppt2_w,
-        pv_source   = pv_source,  -- "primary_reg" | "mppt_sum" | "zero"
-        lifetime_wh = pv_gen_wh,
-        rated_w     = rated_w,
-        temp_c      = heatsink_c,
+        dc_W                = -pv_w,  -- negative = generation (EMS convention)
+        mppts               = {
+            { V = mppt1_v, A = mppt1_a, W = mppt1_w },
+            { V = mppt2_v, A = mppt2_a, W = mppt2_w },
+        },
+        pv_source           = pv_source,  -- "primary_reg" | "mppt_sum" | "zero"
+        total_generation_Wh = pv_gen_wh,
+        rated_w             = rated_w,
+        temp_c              = heatsink_c,
     })
     -- Diagnostics: long-format TS DB. Surface BOTH the primary-register
     -- reading and the MPPT-derived fallback so operators can see when
     -- the two disagree (= firmware register quirk) directly in the
-    -- metric browser.
+    -- metric browser. Per-tracker pv_mppt{n}_v/a/w series come from the
+    -- host's mppts[] fan-out — no manual emit_metric needed.
     host.emit_metric("pv_w_primary",     pv_w_primary)
     host.emit_metric("pv_w_mppt_sum",    pv_w_mppt)
     host.emit_metric("pv_raw_u32",       pv_raw_u32)
-    host.emit_metric("pv_mppt1_v",       mppt1_v)
-    host.emit_metric("pv_mppt1_a",       mppt1_a)
-    host.emit_metric("pv_mppt1_w",       mppt1_w)
-    host.emit_metric("pv_mppt2_v",       mppt2_v)
-    host.emit_metric("pv_mppt2_a",       mppt2_a)
-    host.emit_metric("pv_mppt2_w",       mppt2_w)
     host.emit_metric("inverter_temp_c",  heatsink_c)
     host.emit_metric("grid_hz",          hz)
 
@@ -279,12 +272,12 @@ function driver_poll()
     end
 
     host.emit("battery", {
-        w            = bat_w,
-        v            = bat_v,
-        a            = bat_a,
-        soc          = bat_soc,
-        charge_wh    = bat_charge_wh,
-        discharge_wh = bat_discharge_wh,
+        dc_W               = bat_w,
+        V                  = bat_v,
+        A                  = bat_a,
+        SoC_nom_fract      = bat_soc,
+        total_charge_Wh    = bat_charge_wh,
+        total_discharge_Wh = bat_discharge_wh,
     })
     host.emit_metric("battery_dc_v", bat_v)
     host.emit_metric("battery_dc_a", bat_a)
@@ -350,19 +343,19 @@ function driver_poll()
     end
 
     host.emit("meter", {
-        w         = meter_w,
-        l1_w      = l1_w,
-        l2_w      = l2_w,
-        l3_w      = l3_w,
-        l1_v      = l1_v,
-        l2_v      = l2_v,
-        l3_v      = l3_v,
-        l1_a      = l1_a,
-        l2_a      = l2_a,
-        l3_a      = l3_a,
-        hz        = hz,
-        import_wh = import_wh,
-        export_wh = export_wh,
+        ac_W            = meter_w,
+        L1_W            = l1_w,
+        L2_W            = l2_w,
+        L3_W            = l3_w,
+        L1_V            = l1_v,
+        L2_V            = l2_v,
+        L3_V            = l3_v,
+        L1_A            = l1_a,
+        L2_A            = l2_a,
+        L3_A            = l3_a,
+        Hz              = hz,
+        total_import_Wh = import_wh,
+        total_export_Wh = export_wh,
     })
     host.emit_metric("meter_l1_w", l1_w)
     host.emit_metric("meter_l2_w", l2_w)
