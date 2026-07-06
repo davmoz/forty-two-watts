@@ -80,6 +80,9 @@ func RestartRequiredFor(oldCfg, newCfg *Config) []string {
 	if !pointerEqual(oldCfg.EVCharger, newCfg.EVCharger) {
 		reasons = append(reasons, "ev_charger — EV charger client is constructed once at startup")
 	}
+	if !pointerEqual(oldCfg.DriverRegistry, newCfg.DriverRegistry) {
+		reasons = append(reasons, "driver_registry — registry client (base URL + cache dir) is constructed once at startup")
+	}
 
 	// Weather: PVRatedW, Latitude, Longitude reload live; everything else
 	// (provider, arrays, tilt/azimuth, heating coefficient) is captured
