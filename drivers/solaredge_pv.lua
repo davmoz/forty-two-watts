@@ -7,22 +7,30 @@
 -- driver (e.g. the Pixii PowerShaper via its Model 203 chain) and you
 -- only want PV generation from the SolarEdge inverter.
 
-DRIVER = {
-  id           = "solaredge-pv",
-  name         = "SolarEdge inverter (PV only)",
-  manufacturer = "SolarEdge",
+DRIVER_MANIFEST = {
+  name         = "solaredge-pv",
   version      = "1.1.0",
+  role         = "pv",
+  display_name = "SolarEdge inverter (PV only)",
+  manufacturer = "SolarEdge",
   protocols    = { "modbus" },
-  capabilities = { "pv", "pv-curtail" },
-  description  = "SolarEdge HD-Wave / StorEdge PV-only via Modbus TCP (SunSpec) with PV active-power-limit curtail.",
-  homepage     = "https://www.solaredge.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "HD-Wave", "StorEdge" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Curtail path (F000/F001 registers) not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "HD-Wave", "StorEdge" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Curtail path (F000/F001 registers) not yet verified against live hardware on a 42W site.",
+  },
+  requires = {},
+  options = {
+    { name = "nominal_w", purpose = "control", type = "integer",
+      help = "Inverter nameplate AC power in W, used to convert curtail watt targets to percent." },
+  },
+  provides = {
+    live   = { "pv.dc_W" },
+    static = { "make", "sn" },
   },
 }
 --

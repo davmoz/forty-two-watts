@@ -17,22 +17,27 @@
 -- convention (positive = export on Huawei), so meter power + per-phase
 -- power + per-phase current are all negated at the boundary.
 
-DRIVER = {
-  id           = "huawei-sun2000",
-  name         = "Huawei SUN2000 Hybrid Inverter",
-  manufacturer = "Huawei",
+DRIVER_MANIFEST = {
+  name         = "huawei-sun2000",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "Huawei SUN2000 Hybrid Inverter",
+  manufacturer = "Huawei",
   protocols    = { "modbus" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "Huawei SUN2000 hybrid inverters with LUNA2000 battery via Modbus TCP.",
-  homepage     = "https://solar.huawei.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "SUN2000L1", "SUN2000-LUNA2000" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "SUN2000L1", "SUN2000-LUNA2000" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  requires = {},
+  options  = {},
+  provides = {
+    live   = { "meter.ac_W", "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
+    static = { "make", "sn" },
   },
 }
 

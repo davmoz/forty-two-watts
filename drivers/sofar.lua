@@ -20,22 +20,27 @@
 --
 -- Read-only driver: no control surface implemented.
 
-DRIVER = {
-  id           = "sofar",
-  name         = "Sofar hybrid inverter",
-  manufacturer = "Sofar Solar",
+DRIVER_MANIFEST = {
+  name         = "sofar",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "Sofar hybrid inverter",
+  manufacturer = "Sofar Solar",
   protocols    = { "modbus" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "Sofar Solar HYD-ES / HYD-EP hybrid inverters via Modbus TCP.",
-  homepage     = "https://www.sofarsolar.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "HYD-ES", "HYD-EP" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "HYD-ES", "HYD-EP" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  requires = {},
+  options  = {},
+  provides = {
+    live   = { "meter.ac_W", "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
+    static = { "make" },
   },
 }
 

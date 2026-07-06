@@ -108,18 +108,21 @@ func TestSolisStringCatalogEntry(t *testing.T) {
 	}
 	var found *CatalogEntry
 	for i, e := range entries {
-		if e.ID == "solis-string" {
+		if e.ID == "solis_string" {
 			found = &entries[i]
 			break
 		}
 	}
 	if found == nil {
-		t.Fatalf("solis-string not in catalog")
+		t.Fatalf("solis_string not in catalog")
+	}
+	if found.Name != "solis-string" {
+		t.Errorf("manifest name = %q, want solis-string", found.Name)
 	}
 	if found.Manufacturer != "Ginlong Solis" {
 		t.Errorf("manufacturer = %q, want Ginlong Solis", found.Manufacturer)
 	}
-	if len(found.Capabilities) != 1 || found.Capabilities[0] != "pv" {
-		t.Errorf("capabilities = %v, want [pv]", found.Capabilities)
+	if found.Role != "pv" {
+		t.Errorf("role = %q, want pv", found.Role)
 	}
 }

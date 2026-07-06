@@ -43,23 +43,34 @@
 --   of generation reports pv.W = -2745). So we pass both through
 --   unchanged — no boundary sign flip.
 
-DRIVER = {
-  id           = "sourceful-zap",
-  name         = "Sourceful Zap",
-  manufacturer = "Sourceful",
+DRIVER_MANIFEST = {
+  name         = "sourceful-zap",
   version      = "1.1.0",
+  role         = "meter",
+  display_name = "Sourceful Zap",
+  manufacturer = "Sourceful",
   protocols    = { "http" },
-  capabilities = { "meter", "pv" },
-  description  = "Sourceful Zap local-JSON gateway: P1 grid meter + PV from any attached inverter.",
-  homepage     = "https://sourceful.energy",
-  authors      = { "forty-two-watts contributors" },
-  http_hosts   = { "zap.local" },
-  verification_status = "beta",
-  verified_by = { "erikarenhill@fortytwo:3d" },
-  verified_at = "2026-04-17",
-  verification_notes = "P1 + PV aggregation verified against a live Sourceful Zap. Awaiting a second site to promote to production.",
   connection_defaults = {
     host = "zap.local",
+  },
+  verification = {
+    status      = "beta",
+    verified_by = { "erikarenhill@fortytwo:3d" },
+    verified_at = "2026-04-17",
+    notes       = "P1 + PV aggregation verified against a live Sourceful Zap. Awaiting a second site to promote to production.",
+  },
+  requires = {},
+  options = {
+    { name = "host", purpose = "always", type = "string",
+      help = "Zap hostname or IP (default zap.local)." },
+    { name = "serial", purpose = "always", type = "string",
+      help = "P1 meter serial to read when several are attached." },
+    { name = "disable_pv", purpose = "always", type = "boolean",
+      help = "Skip PV aggregation from attached inverters." },
+  },
+  provides = {
+    live   = { "meter.ac_W", "pv.dc_W" },
+    static = { "make", "sn" },
   },
 }
 

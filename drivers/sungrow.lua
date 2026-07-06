@@ -3,24 +3,29 @@
 -- Protocol: Modbus TCP (port 502, unit ID 1)
 -- Reference: https://github.com/mkaiser/Sungrow-SHx-Inverter-Modbus-Home-Assistant
 
-DRIVER = {
-  id           = "sungrow-shx",
-  name         = "Sungrow SH Hybrid Inverter",
-  manufacturer = "Sungrow",
+DRIVER_MANIFEST = {
+  name         = "sungrow-shx",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "Sungrow SH Hybrid Inverter",
+  manufacturer = "Sungrow",
   protocols    = { "modbus" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "Sungrow SH-series hybrid inverters with LFP battery, via Modbus TCP.",
-  homepage     = "https://en.sungrowpower.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "SH5.0RT", "SH6.0RT", "SH8.0RT", "SH10RT" },
-  verification_status = "production",
-  verified_by = { "frahlg@homelab-rpi:14d" },
-  verified_at = "2026-04-18",
-  verification_notes = "Battery control + telemetry in continuous use on homelab-rpi. Device type 0x0E0E (SH10RT).",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "SH5.0RT", "SH6.0RT", "SH8.0RT", "SH10RT" },
+  verification = {
+    status      = "production",
+    verified_by = { "frahlg@homelab-rpi:14d" },
+    verified_at = "2026-04-18",
+    notes       = "Battery control + telemetry in continuous use on homelab-rpi. Device type 0x0E0E (SH10RT).",
+  },
+  requires = {},
+  options  = {},
+  provides = {
+    live   = { "meter.ac_W", "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
+    static = { "make", "sn" },
   },
 }
 --

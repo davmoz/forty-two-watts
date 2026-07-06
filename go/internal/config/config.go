@@ -583,6 +583,12 @@ type Driver struct {
 	// Disabled skips this driver at startup / reload. Set via the UI when
 	// you want to temporarily take a driver out without editing yaml.
 	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	// TelemetryOnly runs this driver read-only: manifest fields with
+	// purpose "control" are not enforced at validation, and the registry
+	// never dispatches command verbs to it (the watchdog's default-mode
+	// fallback is still allowed). Lets a freshly wired device be brought
+	// up before install-time control fields are filled in.
+	TelemetryOnly bool `yaml:"telemetry_only,omitempty" json:"telemetry_only,omitempty"`
 	// HasPassword is a JSON-only signal to the UI that Config["password"]
 	// holds a non-empty value on disk. Populated by MaskSecrets after the
 	// real password is blanked out so the operator can still tell apart

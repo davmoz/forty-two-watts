@@ -47,10 +47,20 @@ type readingDTO struct {
 }
 
 type driverIdentityDTO struct {
-	Make     string `json:"make,omitempty"`
-	SN       string `json:"sn,omitempty"`
-	MAC      string `json:"mac,omitempty"`
-	Endpoint string `json:"endpoint,omitempty"`
+	Make     string  `json:"make,omitempty"`
+	Model    string  `json:"model,omitempty"`
+	SN       string  `json:"sn,omitempty"`
+	MAC      string  `json:"mac,omitempty"`
+	Endpoint string  `json:"endpoint,omitempty"`
+	RatedW   float64 `json:"rated_w,omitempty"`
+}
+
+func identityDTOFromEnv(env *drivers.HostEnv) driverIdentityDTO {
+	id := env.IdentityInfo()
+	return driverIdentityDTO{
+		Make: id.Make, Model: id.Model, SN: id.SN,
+		MAC: id.MAC, Endpoint: id.Endpoint, RatedW: id.RatedW,
+	}
 }
 
 type driverProbeResp struct {
@@ -98,8 +108,7 @@ func (s *Server) handleDriverDetail(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(resp.Metrics, func(i, j int) bool { return resp.Metrics[i].Name < resp.Metrics[j].Name })
 	if s.deps.Registry != nil {
 		if env := s.deps.Registry.Env(name); env != nil {
-			make, sn, mac, ep := env.FullIdentity()
-			resp.Identity = driverIdentityDTO{Make: make, SN: sn, MAC: mac, Endpoint: ep}
+			resp.Identity = identityDTOFromEnv(env)
 		}
 	}
 	writeJSON(w, 200, resp)
@@ -258,8 +267,7 @@ func collectDriverProbe(displayName, runtimeName string, tel *telemetry.Store, r
 	resp.Metrics = tel.LatestMetricsByDriver(runtimeName)
 	sort.Slice(resp.Metrics, func(i, j int) bool { return resp.Metrics[i].Name < resp.Metrics[j].Name })
 	if env := reg.Env(runtimeName); env != nil {
-		make, sn, mac, ep := env.FullIdentity()
-		resp.Identity = driverIdentityDTO{Make: make, SN: sn, MAC: mac, Endpoint: ep}
+		resp.Identity = identityDTOFromEnv(env)
 	}
 	return resp
 }

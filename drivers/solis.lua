@@ -47,22 +47,30 @@
 --
 -- Solis firmware NACKs back-to-back holding writes; space them ~100 ms.
 
-DRIVER = {
-  id           = "solis",
-  name         = "Solis hybrid inverter",
-  manufacturer = "Ginlong Solis",
+DRIVER_MANIFEST = {
+  name         = "solis",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "Solis hybrid inverter",
+  manufacturer = "Ginlong Solis",
   protocols    = { "modbus" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "Solis S5/S6 hybrid inverters via Modbus TCP.",
-  homepage     = "https://www.ginlong.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "S6-EH", "S5-GR", "S6-GR" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "S6-EH", "S5-GR", "S6-GR" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  requires = {},
+  options = {
+    { name = "rated_w", purpose = "always", type = "integer",
+      help = "Inverter rated AC power in W (default 5000); bounds setpoint writes." },
+  },
+  provides = {
+    live   = { "meter.ac_W", "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
+    static = { "make", "sn" },
   },
 }
 

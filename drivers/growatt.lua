@@ -15,22 +15,27 @@
 -- The native meter register is already positive=import, so it maps
 -- to site convention without a flip.
 
-DRIVER = {
-  id           = "growatt",
-  name         = "Growatt hybrid inverter",
-  manufacturer = "Growatt",
+DRIVER_MANIFEST = {
+  name         = "growatt",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "Growatt hybrid inverter",
+  manufacturer = "Growatt",
   protocols    = { "modbus" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "Growatt SPH / MOD hybrid inverters via Modbus TCP.",
-  homepage     = "https://www.growatt.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "SPH", "MOD" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "SPH", "MOD" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  requires = {},
+  options  = {},
+  provides = {
+    live   = { "meter.ac_W", "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
+    static = { "make" },
   },
 }
 

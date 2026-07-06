@@ -9,7 +9,7 @@ import (
 // drivers/ dir and asserts the expected status labels for each driver
 // we've manually annotated. Every other driver in the tree is expected
 // to parse as "experimental" (the normalized default for missing /
-// unknown values).
+// unknown values). Catalog IDs are file stems.
 func TestCatalogVerificationStatus(t *testing.T) {
 	entries, err := LoadCatalog("../../../drivers")
 	if err != nil {
@@ -25,13 +25,13 @@ func TestCatalogVerificationStatus(t *testing.T) {
 		status string
 	}{
 		{"ferroamp", "production"},
-		{"sungrow-shx", "production"},
-		{"easee-cloud", "production"},
-		{"ferroamp-modbus", "experimental"},
-		{"sourceful-zap", "beta"},
+		{"sungrow", "production"},
+		{"easee_cloud", "production"},
+		{"ferroamp_modbus", "experimental"},
+		{"zap", "beta"},
 		{"deye", "experimental"},
 		{"solis", "experimental"},
-		{"solis-string", "experimental"},
+		{"solis_string", "experimental"},
 		{"tibber", "experimental"},
 	}
 	for _, tc := range cases {
@@ -40,38 +40,41 @@ func TestCatalogVerificationStatus(t *testing.T) {
 			if !ok {
 				t.Fatalf("driver %q missing from catalog (got %d entries)", tc.id, len(entries))
 			}
-			if e.VerificationStatus != tc.status {
-				t.Errorf("%s: VerificationStatus=%q, want %q", tc.id, e.VerificationStatus, tc.status)
+			if e.Verification == nil {
+				t.Fatalf("%s: no verification block after normalization", tc.id)
+			}
+			if e.Verification.Status != tc.status {
+				t.Errorf("%s: verification.status=%q, want %q", tc.id, e.Verification.Status, tc.status)
 			}
 		})
 	}
 }
 
-// Drivers at production status must also have a non-empty VerifiedBy
+// Drivers at production status must also have a non-empty verified_by
 // list — otherwise the label is hearsay. Beta is fuzzier; experimental
 // needs nothing. This check runs against the real catalog so
 // adding a new "production" annotation without also filling in
-// VerifiedBy fails loud at CI.
+// verified_by fails loud at CI.
 func TestCatalogProductionDriversHaveVerifier(t *testing.T) {
 	entries, err := LoadCatalog("../../../drivers")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if e.VerificationStatus != "production" {
+		if e.Verification == nil || e.Verification.Status != "production" {
 			continue
 		}
-		if len(e.VerifiedBy) == 0 {
-			t.Errorf("%s (%s): marked production but no VerifiedBy entries — who tested it?",
+		if len(e.Verification.VerifiedBy) == 0 {
+			t.Errorf("%s (%s): marked production but no verified_by entries — who tested it?",
 				e.ID, e.Filename)
 		}
-		if e.VerifiedAt == "" {
-			t.Errorf("%s (%s): marked production but no VerifiedAt date", e.ID, e.Filename)
+		if e.Verification.VerifiedAt == "" {
+			t.Errorf("%s (%s): marked production but no verified_at date", e.ID, e.Filename)
 		}
 	}
 }
 
-// Unknown / garbage values in the Lua file must normalize to
+// Unknown / garbage values in the manifest must normalize to
 // "experimental" rather than propagate an invalid label to the UI.
 func TestNormalizeVerificationStatus(t *testing.T) {
 	cases := map[string]string{
@@ -91,11 +94,11 @@ func TestNormalizeVerificationStatus(t *testing.T) {
 	}
 }
 
-// TestCatalogConfigSecrets verifies the regex-based parser surfaces
-// `config_secrets = { ... }` from a driver's DRIVER block end-to-end.
-// Sonnen is the canonical user — its api_token has to land in the
-// catalog so the Settings UI can render the password input.
-func TestCatalogConfigSecrets(t *testing.T) {
+// TestCatalogSecretFields verifies the per-field `secret = true` markers
+// surface end-to-end from a driver's manifest. Sonnen is the canonical
+// user — its api_token has to land in SecretKeys so the Settings UI can
+// render the password input and the API can mask it.
+func TestCatalogSecretFields(t *testing.T) {
 	entries, err := LoadCatalog("../../../drivers")
 	if err != nil {
 		t.Fatalf("LoadCatalog: %v", err)
@@ -109,16 +112,23 @@ func TestCatalogConfigSecrets(t *testing.T) {
 	if !ok {
 		t.Fatalf("sonnen driver missing from catalog (got %d entries)", len(entries))
 	}
-	if got, want := sonnen.ConfigSecrets, []string{"api_token"}; len(got) != len(want) || got[0] != want[0] {
-		t.Errorf("sonnen ConfigSecrets = %v, want %v", got, want)
+	if got, want := sonnen.SecretKeys(), []string{"api_token"}; len(got) != len(want) || got[0] != want[0] {
+		t.Errorf("sonnen SecretKeys = %v, want %v", got, want)
 	}
 
-	// Drivers that don't declare config_secrets must come back with a
-	// nil/empty slice — never a phantom entry from a regex over-match.
-	if len(byID["pixii"].ConfigSecrets) != 0 {
-		t.Errorf("pixii unexpectedly has ConfigSecrets=%v", byID["pixii"].ConfigSecrets)
+	if got := byID["tibber"].SecretKeys(); len(got) != 1 || got[0] != "api_key" {
+		t.Errorf("tibber SecretKeys = %v, want [api_key]", got)
 	}
-	if len(byID["ferroamp"].ConfigSecrets) != 0 {
-		t.Errorf("ferroamp unexpectedly has ConfigSecrets=%v", byID["ferroamp"].ConfigSecrets)
+	if got := byID["easee_cloud"].SecretKeys(); len(got) != 1 || got[0] != "password" {
+		t.Errorf("easee_cloud SecretKeys = %v, want [password]", got)
+	}
+
+	// Drivers without secret fields must come back empty — never a
+	// phantom entry.
+	if got := byID["pixii"].SecretKeys(); len(got) != 0 {
+		t.Errorf("pixii unexpectedly has SecretKeys=%v", got)
+	}
+	if got := byID["ferroamp"].SecretKeys(); len(got) != 0 {
+		t.Errorf("ferroamp unexpectedly has SecretKeys=%v", got)
 	}
 }

@@ -64,22 +64,48 @@
 --         mqtt_em_topic:         "CTEK/+/evse<c>/em"            # JSON; live telemetry
 --         mqtt_max_stale_ms:     30000                          # after this, fall back to Modbus
 
-DRIVER = {
-  id           = "ctek-chargestorm-hybrid",
-  name         = "CTEK Chargestorm (Modbus + MQTT)",
-  manufacturer = "CTEK",
+DRIVER_MANIFEST = {
+  name         = "ctek-chargestorm-hybrid",
   version      = "0.2.0",
+  role         = "ev",
+  display_name = "CTEK Chargestorm (Modbus + MQTT)",
+  manufacturer = "CTEK",
   protocols    = { "modbus", "mqtt" },
-  capabilities = { "ev" },
-  description  = "CTEK Chargestorm Connected 2/3 — MQTT for state + live telemetry (preferred), Modbus/TCP for control + telemetry fallback.",
-  homepage     = "https://www.ctek.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "Chargestorm Connected 2", "Chargestorm Connected 3" },
-  verification_status = "alpha",
-  verification_notes = "Observed against CSOS 4.9.x on station 91728M03W4010406 (EVSE serial 272274U). MQTT broker is the CCU itself; defaults assume the stock topic layout `CTEK/<station>/evse<n>/...`. Falls back to Modbus telemetry whenever MQTT is stale (>mqtt_max_stale_ms).",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "Chargestorm Connected 2", "Chargestorm Connected 3" },
+  verification = {
+    status = "alpha",
+    notes  = "Observed against CSOS 4.9.x on station 91728M03W4010406 (EVSE serial 272274U). MQTT broker is the CCU itself; defaults assume the stock topic layout `CTEK/<station>/evse<n>/...`. Falls back to Modbus telemetry whenever MQTT is stale (>mqtt_max_stale_ms).",
+  },
+  requires = {},
+  options = {
+    { name = "phases", purpose = "always", type = "integer", min = 1, max = 3,
+      help = "Number of phases wired to the EVSE." },
+    { name = "voltage_v", purpose = "always", type = "double",
+      help = "Per-phase mains voltage used for A/W conversion (default 230)." },
+    { name = "min_a", purpose = "control", type = "integer",
+      help = "Minimum charging current in A." },
+    { name = "max_a", purpose = "control", type = "integer",
+      help = "Maximum charging current in A." },
+    { name = "mqtt_connector", purpose = "always", type = "integer",
+      help = "EVSE connector index in the CCU MQTT topic layout." },
+    { name = "mqtt_discover_topic", purpose = "always", type = "string",
+      help = "Override for the CCU discovery topic." },
+    { name = "mqtt_state_topic", purpose = "always", type = "string",
+      help = "Override for the EVSE state topic." },
+    { name = "mqtt_state_json_field", purpose = "always", type = "string",
+      help = "JSON field carrying the EVSE state code." },
+    { name = "mqtt_em_topic", purpose = "always", type = "string",
+      help = "Override for the energy-meter telemetry topic." },
+    { name = "mqtt_max_stale_ms", purpose = "always", type = "integer",
+      help = "Fall back to Modbus telemetry when MQTT is older than this." },
+  },
+  provides = {
+    live   = { "ev.w" },
+    static = { "make", "sn" },
   },
 }
 

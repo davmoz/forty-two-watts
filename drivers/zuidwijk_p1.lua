@@ -8,21 +8,32 @@
 --           meter data (rare in NL) must be decrypted by an external proxy
 --           before reaching this driver.
 
-DRIVER = {
-  id           = "zuidwijk-p1",
-  name         = "Zuidwijk P1 Reader Ethernet",
-  manufacturer = "Zuidwijk",
+DRIVER_MANIFEST = {
+  name         = "zuidwijk-p1",
   version      = "1.0.0",
+  role         = "meter",
+  display_name = "Zuidwijk P1 Reader Ethernet",
+  manufacturer = "Zuidwijk",
   protocols    = { "tcp" },
-  capabilities = { "meter" },
-  description  = "Dutch DSMR P1 smart-meter via Zuidwijk Serial-to-Ethernet bridge (raw TCP, port 23).",
-  homepage     = "https://www.zuidwijk.com/product/p1-reader-ethernet/",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "Sagemcom T210-D", "Kaifa MA105/MA304", "Iskra ME382" },
-  verification_status = "experimental",
-  verification_notes = "Implemented from DSMR 5.0 spec; not yet exercised against live hardware.",
   connection_defaults = {
     port = 23,
+  },
+  tested_models = { "Sagemcom T210-D", "Kaifa MA105/MA304", "Iskra ME382" },
+  verification = {
+    status = "experimental",
+    notes  = "Implemented from DSMR 5.0 spec; not yet exercised against live hardware.",
+  },
+  requires = {
+    { name = "host", purpose = "always", type = "string",
+      help = "IP of the P1 Reader Ethernet bridge." },
+  },
+  options = {
+    { name = "port", purpose = "always", type = "integer", min = 1, max = 65535,
+      help = "Raw TCP port (default 23)." },
+  },
+  provides = {
+    live   = { "meter.ac_W" },
+    static = { "make", "sn" },
   },
 }
 --

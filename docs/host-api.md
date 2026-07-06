@@ -35,16 +35,18 @@ Returning `false` or a non-empty string is treated as an error.
 
 | Call | Notes |
 |---|---|
-| `host.log(level, message)` | `level` is `"debug"`, `"info"`, `"warn"`, or `"error"`. Two arguments are required. |
-| `host.millis()` | Milliseconds since driver start. |
+| `host.log(level, message)` | `level` is `"debug"`, `"info"`, `"warn"`, or `"error"`. |
+| `host.log(message)` | Single-argument form logs at `info` (blixt compatibility). |
+| `host.millis()` | Milliseconds since driver start (monotonic). |
+| `host.now_ms()` | Wall-clock milliseconds since the Unix epoch. |
 | `host.sleep(ms)` | Blocks this driver goroutine; use only for vendor-required inter-write pacing. |
 | `host.set_poll_interval(ms)` | Overrides the next poll cadence. Returning `ms` from `driver_poll` has the same effect. |
 | `host.set_watchdog_timeout_s(seconds)` | Per-driver watchdog override. `0` clears it. |
 | `host.set_make(name)` | Manufacturer used for device identity. |
 | `host.set_sn(serial)` | Serial number used for stable `device_id`. |
-
-There is no `host.timestamp()`, `host.pool_free()`, or one-argument
-`host.log()` in the current runtime.
+| `host.set_model(name)` | Model string (descriptive; not part of `device_id`). |
+| `host.set_rated_w(w)` | Nameplate AC rating, surfaced in the driver identity DTO. |
+| `host.set_warmup_s(n)` | Post-init settle hold: the registry suppresses command dispatch (not polls) for `n` seconds after the `init` command verb. |
 
 ## Telemetry
 
@@ -56,6 +58,16 @@ host.emit("ev", { w = 7200, connected = true, charging = true })
 host.emit("v2x_charger", { w = -3000, vehicle_soc = 0.70, connected = true })
 host.emit("vehicle", { soc = 62, charging_state = "Stopped" })
 ```
+
+`host.emit` also accepts the canonical blixt/@srcful-data-models keys
+(exact case): `dc_W` / `ac_W` (with legacy `W` fallback), `SoC_nom_fract`
+(0..1 fraction), `V` / `A` / `temperature_C`, per-phase `L1_V`/`L1_A`/`L1_W`,
+`Hz`, energy totals, and `pv.mppts = { {V=,A=,W=}, … }` (fanned out to
+`mppt{n}_v/a/w` TS-DB series). A new `"inverter"` event carries structured
+diagnostics (`ac_W`, `VA`, `Hz`, `heatsink_C`, `rated_W`, …) routed through
+the `emit_metric` pathway. See [`driver-manifest.md`](driver-manifest.md)
+for the full canonical vocabulary. Signs pass through unchanged — the
+Sourceful axis matches ftw site convention at the driver boundary.
 
 Power signs use site convention:
 
@@ -98,9 +110,9 @@ Available only when the driver has `capabilities.modbus`.
 
 | Call | Notes |
 |---|---|
-| `host.modbus_read(addr, count, kind)` | `kind` is `"coil"`, `"discrete"`, `"holding"`, or `"input"`. Returns a 1-indexed table, or `nil, err`. |
-| `host.modbus_write(addr, value)` | Write one holding register. |
-| `host.modbus_write_multi(addr, values)` | Write multiple holding registers. |
+| `host.modbus_read(addr, count, kind)` | `kind` is `"coil"`, `"discrete"`, `"holding"`, or `"input"`; optional, defaults to `"holding"`. Returns a 1-indexed table, or `nil, err`. |
+| `host.modbus_write(addr, value)` | Write one holding register. Alias: `host.write`. |
+| `host.modbus_write_multi(addr, values)` | Write multiple holding registers. Alias: `host.write_registers`. |
 
 Wrap reads in `pcall` or handle the `nil, err` form so one failed read does
 not crash the poll cycle.
@@ -162,10 +174,9 @@ P1 meter bridges that stream unsolicited frames.
 | `host.decode_i32_le(lo, hi)` | Signed 32-bit, little-endian word order. |
 | `host.decode_i32_be(hi, lo)` | Signed 32-bit, big-endian word order. |
 | `host.decode_i16(reg)` | Sign-extend one uint16 to int16. |
-
-There is no unsuffixed `decode_u32`, `decode_i32`, `decode_f32`,
-`decode_u64`, or `scale` helper. Drivers that need those conversions should
-implement them locally.
+| `host.decode_u16(reg)` | Mask one value to uint16. |
+| `host.decode_f32_be(hi, lo)` | IEEE-754 float32, hi word first. |
+| `host.decode_string(regs, start, count)` | ASCII packed 2 chars/register (hi byte then lo), reading `count` registers from 1-based index `start`; trailing NULs/spaces trimmed. |
 
 ## JSON Helpers
 
