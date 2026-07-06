@@ -106,10 +106,25 @@ drivers:
         unit_id: 1
 ```
 
+A driver can instead be fetched from the Sourceful driver registry with
+a pinned `driver: name@version` reference (see
+[driver-registry.md](driver-registry.md)):
+
+```yaml
+drivers:
+  - name: deye
+    driver: deye@3.1.1        # registry ref — mutually exclusive with `lua`
+    is_site_meter: true
+    capabilities:
+      modbus:
+        host: 192.168.1.42
+```
+
 Rules:
 
 - `name` is the stable API/UI key for this configured instance.
-- `lua` is required; Lua is the only current driver runtime.
+- Exactly one of `lua` (local file) or `driver` (pinned registry ref
+  `name@version`) is required; Lua is the only current driver runtime.
 - Exactly one configured driver must have `is_site_meter: true`.
 - A driver must have at least one of `mqtt`, `modbus`, `http`,
   `websocket`, or `tcp` under `capabilities`.
@@ -191,6 +206,28 @@ Parquet under `cold_dir`.
 
 Changing `state.path` or `state.cold_dir` requires restart.
 
+## `driver_registry`
+
+Configures the Sourceful driver registry used to resolve pinned
+`driver: name@version` refs (full guide: [driver-registry.md](driver-registry.md)):
+
+```yaml
+driver_registry:
+  net: devnet        # devnet | testnet | mainnet (default devnet)
+  url: ""            # explicit base URL — beats `net` when set
+  cache_dir: ""      # default <state dir>/driver-cache
+```
+
+- `net` selects the per-network registry base
+  `https://novacore-{net}.sourceful.dev/device-support/drivers`.
+- `url` overrides `net` for self-hosted or dev registries.
+- The `DRIVER_REGISTRY_URL` environment variable beats both.
+- `cache_dir` holds fetched drivers as `{name}-{version}.lua`; a warm
+  cache keeps registry drivers working fully offline.
+
+The whole section is optional — omitting it uses the devnet defaults.
+Changing it requires restart (the client is constructed at startup).
+
 ## `price` and `weather`
 
 ```yaml
@@ -268,6 +305,8 @@ these specialized blocks.
 | `fuse.*` | yes | Read by the control loop. |
 | `drivers[]` add/remove/reconfigure | yes | Registry diffs and respawns affected drivers. |
 | `drivers[].lua` path change | yes | Driver restarts with the new file. |
+| `drivers[].driver` ref change | yes | Driver restarts on the newly pinned version (fetched if not cached). |
+| `driver_registry.*` | no | Registry client (base URL + cache dir) is constructed at startup. |
 | Editing a Lua file in place | no | Restart or touch `config.yaml` to reload the driver. |
 | `api.port` | no | Socket bind happens at startup. |
 | `state.path`, `state.cold_dir` | no | Store opens at startup. |
