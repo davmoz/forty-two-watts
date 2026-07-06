@@ -4,22 +4,27 @@
 -- Reference: Kostal SunSpec map. SunSpec is big-endian for u32 values.
 -- READ-ONLY: no battery / curtail control.
 
-DRIVER = {
-  id           = "kostal",
-  name         = "Kostal Plenticore",
-  manufacturer = "Kostal",
+DRIVER_MANIFEST = {
+  name         = "kostal",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "Kostal Plenticore",
+  manufacturer = "Kostal",
   protocols    = { "modbus" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "Kostal Plenticore Plus and Piko IQ via Modbus TCP (SunSpec plus Kostal custom map).",
-  homepage     = "https://www.kostal-solar-electric.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "Plenticore Plus", "Piko IQ" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "Plenticore Plus", "Piko IQ" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  requires = {},
+  options  = {},
+  provides = {
+    live   = { "meter.ac_W", "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
+    static = { "make", "sn" },
   },
 }
 

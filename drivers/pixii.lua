@@ -20,22 +20,34 @@
 -- setpoint = discharge on the Pixii side, positive power_w = charge on
 -- the EMS side. The driver negates at the setpoint boundary.
 
-DRIVER = {
-  id           = "pixii",
-  name         = "Pixii PowerShaper",
-  manufacturer = "Pixii",
+DRIVER_MANIFEST = {
+  name         = "pixii",
   version      = "1.0.0",
+  role         = "battery",
+  display_name = "Pixii PowerShaper",
+  manufacturer = "Pixii",
   protocols    = { "modbus" },
-  capabilities = { "battery", "meter" },
-  description  = "Pixii PowerShaper commercial battery storage via Modbus TCP.",
-  homepage     = "https://pixii.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "PowerShaper" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "PowerShaper" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  requires = {},
+  options = {
+    { name = "troubleshooting_mode", purpose = "always", type = "boolean",
+      help = "Verbose incident diagnostics." },
+    { name = "troubleshooting", purpose = "always", type = "boolean",
+      help = "Alias of troubleshooting_mode." },
+    { name = "debug", purpose = "always", type = "boolean",
+      help = "Alias of troubleshooting_mode." },
+  },
+  provides = {
+    live   = { "battery.dc_W", "battery.SoC_nom_fract", "meter.ac_W" },
+    static = { "make", "sn" },
   },
 }
 --

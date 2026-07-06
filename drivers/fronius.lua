@@ -9,22 +9,27 @@
 --   host.decode_f32         → inline IEEE-754 (two u16, big-endian words)
 --   host.scale(v, sf)       → local apply_sf(v, sf)
 
-DRIVER = {
-  id           = "fronius",
-  name         = "Fronius GEN24",
-  manufacturer = "Fronius",
+DRIVER_MANIFEST = {
+  name         = "fronius",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "Fronius GEN24",
+  manufacturer = "Fronius",
   protocols    = { "modbus" },
-  capabilities = { "pv", "battery" },
-  description  = "Fronius Symo / Primo GEN24 hybrid inverters via Modbus TCP (SunSpec).",
-  homepage     = "https://www.fronius.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "Symo GEN24", "Primo GEN24" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "Symo GEN24", "Primo GEN24" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  requires = {},
+  options  = {},
+  provides = {
+    live   = { "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
+    static = { "make", "sn" },
   },
 }
 --

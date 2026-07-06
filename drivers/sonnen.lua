@@ -24,28 +24,37 @@
 --   on first install by checking that battery.w is positive while the
 --   site is exporting and the Sonnen is taking the surplus.
 
-DRIVER = {
-  id           = "sonnen",
-  name         = "sonnenBatterie (local API)",
-  manufacturer = "sonnen",
+DRIVER_MANIFEST = {
+  name         = "sonnen",
   version      = "1.0.0",
+  role         = "battery",
+  display_name = "sonnenBatterie (local API)",
+  manufacturer = "sonnen",
   protocols    = { "http" },
-  capabilities = { "battery" },
-  description  = "sonnenBatterie local JSON API v2: SoC + charge/discharge power. Read-only.",
-  homepage     = "https://sonnen.de",
-  authors      = { "forty-two-watts contributors" },
-  http_hosts   = { },
-  verification_status = "experimental",
-  verification_notes = "Community-contributed local-API driver; not yet verified against live hardware on a 42w site.",
   connection_defaults = {
     host = "",
     port = 80,
   },
-  -- Secret config keys the wizard / Settings UI should render password
-  -- inputs for and stuff into config.<key>. Keeps Auth-Token out of
-  -- yaml-by-hand and lets the operator paste it from the Sonnen web UI
-  -- (Software-Integration → JSON API).
-  config_secrets = { "api_token" },
+  verification = {
+    status = "experimental",
+    notes  = "Community-contributed local-API driver; not yet verified against live hardware on a 42w site.",
+  },
+  requires = {
+    { name = "host", purpose = "always", type = "string",
+      help = "LAN IP of the Sonnen unit." },
+  },
+  options = {
+    { name = "port", purpose = "always", type = "integer", min = 1, max = 65535,
+      help = "JSON API port (default 80)." },
+    -- Auth-Token from the Sonnen web UI (Software-Integration -> JSON API).
+    -- secret=true: the wizard / Settings UI renders a password input.
+    { name = "api_token", purpose = "always", type = "string", secret = true,
+      help = "JSON API v2 Auth-Token from the Sonnen web UI." },
+  },
+  provides = {
+    live   = { "battery.dc_W", "battery.SoC_nom_fract" },
+    static = { "make" },
+  },
 }
 
 PROTOCOL = "http"

@@ -19,22 +19,38 @@
 --         password: "secret"
 --         serial: "EHHZBKPF"    # optional — auto-detected if omitted
 
-DRIVER = {
-  id           = "easee-cloud",
-  name         = "Easee Cloud",
-  manufacturer = "Easee",
+DRIVER_MANIFEST = {
+  name         = "easee-cloud",
   version      = "1.0.0",
+  role         = "ev",
+  display_name = "Easee Cloud",
+  manufacturer = "Easee",
   protocols    = { "http" },
-  capabilities = { "ev" },
-  description  = "Easee Home/Charge via Cloud REST API. No local protocol needed.",
-  homepage     = "https://easee.com",
-  http_hosts   = { "api.easee.com" },
-  authors      = { "forty-two-watts contributors" },
   tested_models = { "Home", "Charge" },
-  verification_status = "production",
-  verified_by = { "frahlg@homelab-rpi:2d", "erikarenhill@fortytwo:1d" },
-  verified_at = "2026-04-18",
-  verification_notes = "Observations API + lifecycle commands exercised against an Easee Home charger. Session state, op_mode labels, charge/pause/resume all verified.",
+  verification = {
+    status      = "production",
+    verified_by = { "frahlg@homelab-rpi:2d", "erikarenhill@fortytwo:1d" },
+    verified_at = "2026-04-18",
+    notes       = "Observations API + lifecycle commands exercised against an Easee Home charger. Session state, op_mode labels, charge/pause/resume all verified.",
+  },
+  requires = {
+    { name = "email", purpose = "always", type = "string",
+      help = "Easee Cloud account e-mail." },
+    { name = "password", purpose = "always", type = "string", secret = true,
+      help = "Easee Cloud account password." },
+  },
+  options = {
+    { name = "serial", purpose = "always", type = "string",
+      help = "Charger serial. Auto-detected when the account has exactly one charger." },
+    { name = "phases", purpose = "always", type = "integer", min = 1, max = 3,
+      help = "Phases wired to the charger. Default 3; single-phase installs MUST set 1 or amperage is 3x under-requested." },
+    { name = "max_charger_current", purpose = "control", type = "double",
+      help = "Clamp the charger's static maxChargerCurrent (A) at init." },
+  },
+  provides = {
+    live   = { "ev.w" },
+    static = { "make", "sn" },
+  },
 }
 
 PROTOCOL = "http"

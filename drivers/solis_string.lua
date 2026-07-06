@@ -5,22 +5,32 @@
 -- Sign convention (site boundary -- positive W = into site):
 --   PV w is always negative because generation reduces grid import.
 
-DRIVER = {
-  id           = "solis-string",
-  name         = "Solis string inverter",
-  manufacturer = "Ginlong Solis",
+DRIVER_MANIFEST = {
+  name         = "solis-string",
   version      = "1.0.0",
+  role         = "pv",
+  display_name = "Solis string inverter",
+  manufacturer = "Ginlong Solis",
   protocols    = { "modbus" },
-  capabilities = { "pv" },
-  description  = "Solis non-hybrid PV inverters via Modbus TCP.",
-  homepage     = "https://www.ginlong.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "S5-GC", "S6-GR1P", "3P-G4", "1P-G4" },
-  verification_status = "experimental",
-  verification_notes = "Read-only PV driver. Awaiting field verification on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "S5-GC", "S6-GR1P", "3P-G4", "1P-G4" },
+  verification = {
+    status = "experimental",
+    notes  = "Read-only PV driver. Awaiting field verification on a 42W site.",
+  },
+  requires = {},
+  options = {
+    { name = "serial", purpose = "always", type = "string",
+      help = "Override the serial read off the bus." },
+    { name = "sn", purpose = "always", type = "string",
+      help = "Alias of serial." },
+  },
+  provides = {
+    live   = { "pv.dc_W" },
+    static = { "make", "sn" },
   },
 }
 

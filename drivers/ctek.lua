@@ -65,22 +65,36 @@
 --         max_a:     16         # fuse-limited max (A); default 16
 --         voltage_v: 230        # nominal per-phase voltage; default 230
 
-DRIVER = {
-  id           = "ctek-chargestorm",
-  name         = "CTEK Chargestorm (API v1)",
-  manufacturer = "CTEK",
+DRIVER_MANIFEST = {
+  name         = "ctek-chargestorm",
   version      = "0.2.0",
+  role         = "ev",
+  display_name = "CTEK Chargestorm (API v1)",
+  manufacturer = "CTEK",
   protocols    = { "modbus" },
-  capabilities = { "ev" },
-  description  = "CTEK Chargestorm Connected 2/3 via Modbus/TCP Automation API v1 (CSOS ≥ 4.9.3). Full telemetry + current-limit control.",
-  homepage     = "https://www.ctek.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "Chargestorm Connected 2", "Chargestorm Connected 3" },
-  verification_status = "beta",
-  verification_notes = "Register map per CTEK Automation interface v1.0; charging-limit write verified against CSOS 4.9.x. Derived charging/connected flags approximate the real EVSE state since the state code is MQTT-only.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "Chargestorm Connected 2", "Chargestorm Connected 3" },
+  verification = {
+    status = "beta",
+    notes  = "Register map per CTEK Automation interface v1.0; charging-limit write verified against CSOS 4.9.x. Derived charging/connected flags approximate the real EVSE state since the state code is MQTT-only.",
+  },
+  requires = {},
+  options = {
+    { name = "phases", purpose = "always", type = "integer", min = 1, max = 3,
+      help = "Number of phases wired to the EVSE." },
+    { name = "voltage_v", purpose = "always", type = "double",
+      help = "Per-phase mains voltage used for A/W conversion (default 230)." },
+    { name = "min_a", purpose = "control", type = "integer",
+      help = "Minimum charging current in A." },
+    { name = "max_a", purpose = "control", type = "integer",
+      help = "Maximum charging current in A." },
+  },
+  provides = {
+    live   = { "ev.w" },
+    static = { "make", "sn" },
   },
 }
 

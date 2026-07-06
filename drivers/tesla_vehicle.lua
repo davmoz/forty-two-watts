@@ -23,18 +23,28 @@
 --         ip:  "192.168.1.50"
 --         vin: "5YJ3E1EA1KF000000"
 
-DRIVER = {
-  id           = "tesla-vehicle",
-  name         = "Tesla Vehicle (BLE Proxy)",
-  manufacturer = "Tesla",
+DRIVER_MANIFEST = {
+  name         = "tesla-vehicle",
   version      = "0.1.0",
+  role         = "ev",
+  display_name = "Tesla Vehicle (BLE Proxy)",
+  manufacturer = "Tesla",
   protocols    = { "http" },
-  capabilities = { "vehicle" },
-  description  = "Read-only vehicle SoC + charge limit via Tesla API-compatible HTTP endpoint (e.g. TeslaBLEProxy).",
-  homepage     = "https://github.com/wimaha/TeslaBleHttpProxy",
-  authors      = { "forty-two-watts contributors" },
   tested_models = { "Model Y", "Model 3" },
-  verification_status = "beta",
+  verification = {
+    status = "beta",
+  },
+  requires = {
+    { name = "ip", purpose = "always", type = "string",
+      help = "LAN address of TeslaBLEProxy (bare IP or host:port)." },
+    { name = "vin", purpose = "always", type = "string",
+      help = "Vehicle VIN the proxy is paired to." },
+  },
+  options = {},
+  provides = {
+    live   = { "vehicle.soc" },
+    static = { "make", "sn" },
+  },
 }
 
 PROTOCOL = "http"

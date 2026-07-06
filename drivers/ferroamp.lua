@@ -2,25 +2,41 @@
 -- Ferroamp EnergyHub MQTT driver
 -- Emits: PV, Battery, Meter telemetry
 
-DRIVER = {
-  id           = "ferroamp",
-  name         = "Ferroamp EnergyHub",
-  manufacturer = "Ferroamp",
+DRIVER_MANIFEST = {
+  name         = "ferroamp",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "Ferroamp EnergyHub",
+  manufacturer = "Ferroamp",
   protocols    = { "mqtt" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "Ferroamp EnergyHub with ESO battery + SSO solar strings (3-phase).",
-  homepage     = "https://ferroamp.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "EnergyHub XL" },
-  verification_status = "production",
-  verified_by = { "frahlg@homelab-rpi:14d" },
-  verified_at = "2026-04-18",
-  verification_notes = "In continuous use on 3-phase 16A SE site, MPC + dispatch control loop exercised daily.",
   connection_defaults = {
     port     = 1883,
     username = "extapi",
     password = "ferroampExtApi",
+  },
+  tested_models = { "EnergyHub XL" },
+  verification = {
+    status      = "production",
+    verified_by = { "frahlg@homelab-rpi:14d" },
+    verified_at = "2026-04-18",
+    notes       = "In continuous use on 3-phase 16A SE site, MPC + dispatch control loop exercised daily.",
+  },
+  requires = {},
+  -- config.eso_capacity_kwh (map of ESO id -> kWh) is also read but is a
+  -- table value, which the manifest field schema cannot express yet.
+  options = {
+    { name = "skip_battery", purpose = "always", type = "boolean",
+      help = "Suppress battery telemetry + control for PV-only EnergyHubs." },
+    { name = "charge_ceil_soc", purpose = "control", type = "double", min = 0, max = 1,
+      help = "Charge ceiling as a 0..1 SoC fraction (default 0.95)." },
+    { name = "discharge_floor_soc", purpose = "control", type = "double", min = 0, max = 1,
+      help = "Discharge floor as a 0..1 SoC fraction (default 0.15)." },
+    { name = "pplim_release_w", purpose = "control", type = "double",
+      help = "SSO pplim released on curtail_disable, in W. 0 = never publish a release (operator clears pplim manually)." },
+  },
+  provides = {
+    live   = { "meter.ac_W", "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
+    static = { "make" },
   },
 }
 --

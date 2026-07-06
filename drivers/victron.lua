@@ -2,22 +2,27 @@
 -- Victron Energy Venus OS / Cerbo GX Modbus TCP driver
 -- Emits: PV, Battery, Meter telemetry (READ-ONLY)
 
-DRIVER = {
-  id           = "victron",
-  name         = "Victron Energy GX",
-  manufacturer = "Victron Energy",
+DRIVER_MANIFEST = {
+  name         = "victron",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "Victron Energy GX",
+  manufacturer = "Victron Energy",
   protocols    = { "modbus" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "Victron Cerbo GX / Venus GX monitoring via Modbus TCP.",
-  homepage     = "https://www.victronenergy.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "Cerbo GX", "Venus GX" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "Cerbo GX", "Venus GX" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  requires = {},
+  options  = {},
+  provides = {
+    live   = { "meter.ac_W", "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
+    static = { "make", "sn" },
   },
 }
 --

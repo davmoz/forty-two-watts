@@ -7,22 +7,27 @@
 -- Tested: ET-Plus, EH series (GoodWe v2 LAN+WiFi dongle required)
 -- READ-ONLY: control not implemented.
 
-DRIVER = {
-  id           = "goodwe",
-  name         = "GoodWe hybrid inverter",
-  manufacturer = "GoodWe",
+DRIVER_MANIFEST = {
+  name         = "goodwe",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "GoodWe hybrid inverter",
+  manufacturer = "GoodWe",
   protocols    = { "modbus" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "GoodWe ET-Plus / EH series hybrid inverters via Modbus TCP.",
-  homepage     = "https://en.goodwe.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "ET-Plus", "EH series" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "ET-Plus", "EH series" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  requires = {},
+  options  = {},
+  provides = {
+    live   = { "meter.ac_W", "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
+    static = { "make" },
   },
 }
 

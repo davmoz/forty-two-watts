@@ -8,19 +8,27 @@
 -- over Modbus via a separate driver. This driver is PV + grid-meter
 -- only, and does not declare a battery capability.
 
-DRIVER = {
-  id           = "pixii-pv",
-  name         = "Pixii PowerShaper (PV + meter)",
-  manufacturer = "Pixii",
+DRIVER_MANIFEST = {
+  name         = "pixii-pv",
   version      = "0.2.0",
+  role         = "pv",
+  display_name = "Pixii PowerShaper (PV + meter)",
+  manufacturer = "Pixii",
   protocols    = { "mqtt" },
-  capabilities = { "pv", "meter" },
-  description  = "Read-only Pixii telemetry: PV (external CTs) + grid meter (meter_w). Battery / SoC comes from the Modbus driver, not this one.",
-  homepage     = "https://pixii.com",
-  authors      = { "forty-two-watts contributors" },
-  verification_status = "experimental",
   connection_defaults = {
     port = 1883,
+  },
+  verification = {
+    status = "experimental",
+  },
+  requires = {},
+  options = {
+    { name = "sn", purpose = "always", type = "string",
+      help = "Only aggregate telemetry from this PowerShaper serial." },
+  },
+  provides = {
+    live   = { "pv.dc_W", "meter.ac_W" },
+    static = { "make", "sn" },
   },
 }
 

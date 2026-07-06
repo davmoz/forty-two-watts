@@ -4,22 +4,36 @@
 -- Protocol: Modbus TCP (holding registers throughout)
 -- Byte order: Little-Endian for multi-register U32 values
 
-DRIVER = {
-  id           = "deye",
-  name         = "Deye hybrid inverter",
-  manufacturer = "Deye",
+DRIVER_MANIFEST = {
+  name         = "deye",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "Deye hybrid inverter",
+  manufacturer = "Deye",
   protocols    = { "modbus" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "Deye SUN-SG series hybrid inverters via Modbus. Auto-detects LV vs HV battery at init.",
-  homepage     = "https://www.deyeinverter.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "SUN-SG03LP1", "SUN-SG04LP3" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "SUN-SG03LP1", "SUN-SG04LP3" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  requires = {},
+  options = {
+    { name = "rated_w", purpose = "always", type = "integer",
+      help = "Inverter rated AC power in W; scales percent-based setpoints." },
+    { name = "max_grid_charge_a", purpose = "control", type = "integer",
+      help = "Max grid-charge current in A (default 31, matching Zap's init profile)." },
+    { name = "soc_max", purpose = "control", type = "integer", min = 0, max = 100,
+      help = "Charge ceiling SoC percent." },
+    { name = "soc_min", purpose = "control", type = "integer", min = 0, max = 100,
+      help = "Discharge floor SoC percent." },
+  },
+  provides = {
+    live   = { "meter.ac_W", "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
+    static = { "make", "sn" },
   },
 }
 --

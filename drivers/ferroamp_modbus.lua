@@ -18,22 +18,27 @@
 --   Ferroamp reports battery power as positive = discharging, so we negate
 --   at the driver boundary to match drivers/ferroamp.lua (the MQTT variant).
 
-DRIVER = {
-  id           = "ferroamp-modbus",
-  name         = "Ferroamp EnergyHub (Modbus)",
-  manufacturer = "Ferroamp",
+DRIVER_MANIFEST = {
+  name         = "ferroamp-modbus",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "Ferroamp EnergyHub (Modbus)",
+  manufacturer = "Ferroamp",
   protocols    = { "modbus" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "Ferroamp EnergyHub XL via Modbus TCP (alternative transport to drivers/ferroamp.lua).",
-  homepage     = "https://ferroamp.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "EnergyHub XL" },
-  verification_status = "experimental",
-  verification_notes = "Ported from sourceful-hugin. Read-only telemetry; control still goes through drivers/ferroamp.lua (MQTT). Not yet verified against live hardware.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "EnergyHub XL" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from sourceful-hugin. Read-only telemetry; control still goes through drivers/ferroamp.lua (MQTT). Not yet verified against live hardware.",
+  },
+  requires = {},
+  options  = {},
+  provides = {
+    live   = { "meter.ac_W", "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
+    static = { "make", "sn" },
   },
 }
 

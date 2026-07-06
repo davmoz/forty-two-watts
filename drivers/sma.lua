@@ -7,22 +7,27 @@
 -- forty-two-watts v2.1 Lua host idiom. READ-ONLY driver — SMA control is
 -- not wired up here.
 
-DRIVER = {
-  id           = "sma",
-  name         = "SMA hybrid inverter",
-  manufacturer = "SMA",
+DRIVER_MANIFEST = {
+  name         = "sma",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "SMA hybrid inverter",
+  manufacturer = "SMA",
   protocols    = { "modbus" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "SMA Sunny Tripower / Sunny Boy Storage via Modbus TCP (SunSpec).",
-  homepage     = "https://www.sma.de",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "Sunny Tripower", "Sunny Boy Storage" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "Sunny Tripower", "Sunny Boy Storage" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  requires = {},
+  options  = {},
+  provides = {
+    live   = { "meter.ac_W", "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
+    static = { "make", "sn" },
   },
 }
 

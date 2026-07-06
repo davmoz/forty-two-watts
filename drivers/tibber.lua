@@ -28,35 +28,28 @@
 --   Site convention `meter.w` = positive on import, so we publish
 --   `power - powerProduction` (giving negative numbers on export).
 
-DRIVER = {
-  id           = "tibber",
-  name         = "Tibber Pulse",
-  manufacturer = "Tibber",
+DRIVER_MANIFEST = {
+  name         = "tibber",
   version      = "1.0.0",
+  role         = "meter",
+  display_name = "Tibber Pulse",
+  manufacturer = "Tibber",
   protocols    = { "websocket", "http" },
-  capabilities = { "meter" },
-  description  = "Tibber Pulse grid meter via GraphQL-transport-ws liveMeasurement stream.",
-  homepage     = "https://tibber.com",
-  authors      = { "forty-two-watts contributors" },
   tested_models = { "Pulse IR", "Pulse HAN", "Pulse P1" },
-  verification_status = "experimental",
-  -- Settings UI: the api_key field gets rendered as a password input in the
-  -- per-driver "secrets" slot. home_id is left out of config_secrets because
-  -- it's optional and auto-resolved from /viewer/homes on first poll.
-  config_secrets = { "api_key" },
-  config_schema = {
-    api_key = {
-      label = "Tibber API key",
-      type  = "string",
-      secret = true,
-      required = true,
-      help = "Personal access token from https://developer.tibber.com/settings/access-token. Needs at least read access to home + liveMeasurement.",
-    },
-    home_id = {
-      label = "Home ID (optional)",
-      type  = "string",
-      help  = "UUID of the home to subscribe to. Auto-resolved from /viewer/homes if omitted.",
-    },
+  verification = {
+    status = "experimental",
+  },
+  requires = {
+    { name = "api_key", purpose = "always", type = "string", secret = true,
+      help = "Personal access token from https://developer.tibber.com/settings/access-token. Needs at least read access to home + liveMeasurement." },
+  },
+  options = {
+    { name = "home_id", purpose = "always", type = "string",
+      help = "UUID of the home to subscribe to. Auto-resolved from /viewer/homes if omitted." },
+  },
+  provides = {
+    live   = { "meter.ac_W" },
+    static = { "make", "sn" },
   },
 }
 
