@@ -39,7 +39,7 @@ var knownEmitKeys = map[string]map[string]struct{}{
 		"available_charge_W", "available_discharge_W",
 		// legacy ftw
 		"w", "soc", "dc_v", "dc_a", "temp_c", "charge_wh", "discharge_wh",
-		"lifetime_wh", "v", "a", "rated_w", "state_label",
+		"lifetime_wh", "capacity_wh", "v", "a", "rated_w", "state_label",
 		"discharge_capable", "charge_capable",
 	),
 	"meter": keySet(
@@ -47,14 +47,15 @@ var knownEmitKeys = map[string]map[string]struct{}{
 		"ac_W", "W", "Hz", "total_import_Wh", "total_export_Wh",
 		"L1_V", "L2_V", "L3_V", "L1_A", "L2_A", "L3_A", "L1_W", "L2_W", "L3_W",
 		// legacy ftw
-		"w", "freq_hz", "lifetime_wh",
+		"w", "freq_hz", "lifetime_wh", "import_wh", "export_wh",
 		"l1_v", "l2_v", "l3_v", "l1_a", "l2_a", "l3_a", "l1_w", "l2_w", "l3_w",
 	),
 	"pv": keySet(
 		// canonical
 		"dc_W", "W", "total_generation_Wh", "mppts",
 		// legacy ftw
-		"w", "dc_v", "lifetime_wh", "rated_w",
+		"w", "dc_v", "dc_w", "lifetime_wh", "generation_wh", "rated_w",
+		"temp_c", "pv_source",
 		"mppt1_v", "mppt1_a", "mppt1_w", "mppt2_v", "mppt2_a", "mppt2_w",
 		"mppt3_v", "mppt3_a", "mppt3_w", "mppt4_v", "mppt4_a", "mppt4_w",
 	),
@@ -88,6 +89,7 @@ var canonicalToLegacy = map[string]map[string]string{
 		"L1_V": "l1_v", "L2_V": "l2_v", "L3_V": "l3_v",
 		"L1_A": "l1_a", "L2_A": "l2_a", "L3_A": "l3_a",
 		"L1_W": "l1_w", "L2_W": "l2_w", "L3_W": "l3_w",
+		"total_import_Wh": "import_wh", "total_export_Wh": "export_wh",
 	},
 	"pv": {
 		"total_generation_Wh": "lifetime_wh",
@@ -159,15 +161,17 @@ func (h *HostEnv) normalizeCanonical(typ string, m map[string]any) {
 		}
 	}
 	if typ == "pv" {
-		h.emitMPPTMetrics(m["mppts"])
+		h.adaptMPPTs(m)
 	}
 }
 
-// emitMPPTMetrics fans the canonical mppts=[{V,A,W},…] array out into
-// per-tracker TS DB series (mppt1_v/mppt1_a/mppt1_w, …), preserving the
-// long-format DB shape.
-func (h *HostEnv) emitMPPTMetrics(v any) {
-	arr, ok := v.([]any)
+// adaptMPPTs fans the canonical mppts=[{V,A,W},…] array out into the
+// per-tracker TS DB series every bundled driver already records
+// (pv_mppt1_v/pv_mppt1_a/pv_mppt1_w, …) and mirrors each row onto the
+// legacy flat Data keys (mppt1_v, …) that Go-side consumers (nova
+// payload) read — only when the driver didn't emit those keys itself.
+func (h *HostEnv) adaptMPPTs(m map[string]any) {
+	arr, ok := m["mppts"].([]any)
 	if !ok {
 		return
 	}
@@ -177,8 +181,14 @@ func (h *HostEnv) emitMPPTMetrics(v any) {
 			continue
 		}
 		for canon, suffix := range map[string]string{"V": "v", "A": "a", "W": "w"} {
-			if val, ok := numValue(row[canon]); ok {
-				_ = h.emitMetric(fmt.Sprintf("mppt%d_%s", i+1, suffix), val)
+			val, ok := numValue(row[canon])
+			if !ok {
+				continue
+			}
+			_ = h.emitMetric(fmt.Sprintf("pv_mppt%d_%s", i+1, suffix), val)
+			legacy := fmt.Sprintf("mppt%d_%s", i+1, suffix)
+			if _, exists := m[legacy]; !exists {
+				m[legacy] = val
 			}
 		}
 	}

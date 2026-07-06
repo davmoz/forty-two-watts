@@ -216,6 +216,11 @@ func TestTibberDriverEmitsMeterFromLiveMeasurement(t *testing.T) {
 		t.Errorf("meter RawW = %v, want 1200 (import)", meter.RawW)
 	}
 	for _, key := range []string{
+		// Canonical keys the driver emits.
+		`"L1_V":231.1`, `"L2_V":230.5`, `"L3_V":229.9`,
+		`"L1_A":2.5`, `"L2_A":1.8`, `"L3_A":1.4`,
+		`"total_import_Wh":12500`, `"total_export_Wh":700`,
+		// Legacy mirrors the adapter maintains for existing consumers.
 		`"l1_v":231.1`, `"l2_v":230.5`, `"l3_v":229.9`,
 		`"l1_a":2.5`, `"l2_a":1.8`, `"l3_a":1.4`,
 		`"import_wh":12500`, `"export_wh":700`,

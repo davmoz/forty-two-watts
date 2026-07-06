@@ -36,24 +36,32 @@ DRIVER_MANIFEST = {
     status = "experimental",
     notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   },
+  poll_interval_ms = 5000,
   requires = {},
   options = {
-    { name = "troubleshooting_mode", purpose = "always", type = "boolean",
-      help = "Verbose incident diagnostics." },
-    { name = "troubleshooting", purpose = "always", type = "boolean",
+    { name = "troubleshooting_mode", purpose = "always", type = "boolean", default = false,
+      help = "Verbose incident diagnostics: setpoint readbacks, heartbeat + command metrics." },
+    { name = "troubleshooting", purpose = "always", type = "boolean", default = false,
       help = "Alias of troubleshooting_mode." },
-    { name = "debug", purpose = "always", type = "boolean",
+    { name = "debug", purpose = "always", type = "boolean", default = false,
       help = "Alias of troubleshooting_mode." },
   },
   provides = {
-    live   = { "battery.dc_W", "battery.SoC_nom_fract", "meter.ac_W" },
+    live   = { "battery.dc_W", "battery.V", "battery.A",
+               "battery.SoC_nom_fract", "battery.temperature_C",
+               "battery.total_charge_Wh", "battery.total_discharge_Wh",
+               "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh" },
     static = { "make", "sn" },
   },
 }
 --
--- Sign convention (SITE = positive W flows INTO the site):
---   Battery w: positive = charging  (load), negative = discharging (source)
---   Meter   w: positive = importing,        negative = exporting
+-- Sign convention (SITE = positive W flows INTO the site, canonical keys):
+--   battery.dc_W: positive = charging  (load), negative = discharging (source)
+--   meter.ac_W  : positive = importing,        negative = exporting
 --
 -- On this Pixii firmware the native meter already reports positive = import,
 -- matching the site convention, so W and A are passed through unchanged.
@@ -381,19 +389,19 @@ function driver_poll()
     end
 
     local battery = {
-        w                    = bat_w,
-        v                    = bat_v,
-        a                    = bat_a,
-        temp_c               = temp_c,
-        charge_wh            = bat_charge_wh,
-        discharge_wh         = bat_discharge_wh,
+        dc_W                 = bat_w,
+        V                    = bat_v,
+        A                    = bat_a,
+        temperature_C        = temp_c,
+        total_charge_Wh      = bat_charge_wh,
+        total_discharge_Wh   = bat_discharge_wh,
         charge_status        = status.charge_status_label,
         control_mode         = status.control_mode_label,
         battery_state        = status.battery_state_label,
         battery_vendor_state = status.vendor_state,
         battery_event1       = status.event1,
     }
-    if bat_soc ~= nil then battery.soc = bat_soc end
+    if bat_soc ~= nil then battery.SoC_nom_fract = bat_soc end
     host.emit("battery", battery)
     -- Diagnostics: long-format TS DB
     host.emit_metric("battery_dc_v",      bat_v)
@@ -515,19 +523,19 @@ function driver_poll()
     -- Native Pixii meter already uses site convention (+import / -export),
     -- so values are passed through without a sign flip.
     host.emit("meter", {
-        w         = meter_w,
-        l1_w      = l1_w,
-        l2_w      = l2_w,
-        l3_w      = l3_w,
-        l1_v      = l1_v,
-        l2_v      = l2_v,
-        l3_v      = l3_v,
-        l1_a      = l1_a,
-        l2_a      = l2_a,
-        l3_a      = l3_a,
-        hz        = meter_hz,
-        import_wh = import_wh,
-        export_wh = export_wh,
+        ac_W            = meter_w,
+        L1_W            = l1_w,
+        L2_W            = l2_w,
+        L3_W            = l3_w,
+        L1_V            = l1_v,
+        L2_V            = l2_v,
+        L3_V            = l3_v,
+        L1_A            = l1_a,
+        L2_A            = l2_a,
+        L3_A            = l3_a,
+        Hz              = meter_hz,
+        total_import_Wh = import_wh,
+        total_export_Wh = export_wh,
     })
     host.emit_metric("meter_l1_w", l1_w)
     host.emit_metric("meter_l2_w", l2_w)

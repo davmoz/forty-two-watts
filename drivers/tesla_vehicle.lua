@@ -36,13 +36,14 @@ DRIVER_MANIFEST = {
   },
   requires = {
     { name = "ip", purpose = "always", type = "string",
-      help = "LAN address of TeslaBLEProxy (bare IP or host:port)." },
+      help = "LAN address of the TeslaBLEProxy sidecar (bare IP or host:port; port defaults to 8080)." },
     { name = "vin", purpose = "always", type = "string",
-      help = "Vehicle VIN the proxy is paired to." },
+      help = "17-character vehicle VIN the proxy is BLE-paired to (Tesla app > vehicle details)." },
   },
   options = {},
   provides = {
-    live   = { "vehicle.soc" },
+    live   = { "vehicle.soc", "vehicle.charge_limit_pct",
+               "vehicle.charging_state" },
     static = { "make", "sn" },
   },
 }

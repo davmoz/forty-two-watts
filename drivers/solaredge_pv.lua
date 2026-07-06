@@ -23,13 +23,14 @@ DRIVER_MANIFEST = {
     status = "experimental",
     notes  = "Ported from a reference implementation. Curtail path (F000/F001 registers) not yet verified against live hardware on a 42W site.",
   },
+  poll_interval_ms = 5000,
   requires = {},
   options = {
-    { name = "nominal_w", purpose = "control", type = "integer",
-      help = "Inverter nameplate AC power in W, used to convert curtail watt targets to percent." },
+    { name = "nominal_w", purpose = "control", type = "integer", min = 100, max = 200000,
+      help = "Inverter nameplate AC power in W (from the datasheet), used to convert curtail watt targets to a 0-100% Active Power Limit. Curtail is unavailable until set." },
   },
   provides = {
-    live   = { "pv.dc_W" },
+    live   = { "pv.dc_W", "pv.mppts[]", "pv.total_generation_Wh" },
     static = { "make", "sn" },
   },
 }

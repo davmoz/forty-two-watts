@@ -11,18 +11,26 @@ DRIVER_MANIFEST = {
   protocols    = { "modbus" },
   connection_defaults = {
     port    = 502,
-    unit_id = 1,
+    unit_id = 100, -- Venus OS "system" aggregate unit — pre-summed across
+                   -- all inverters / chargers / MPPTs wired to the GX
   },
   tested_models = { "Cerbo GX", "Venus GX" },
   verification = {
     status = "experimental",
     notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   },
+  poll_interval_ms = 5000,
   requires = {},
   options  = {},
   provides = {
-    live   = { "meter.ac_W", "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
-    static = { "make", "sn" },
+    live   = { "meter.ac_W",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "pv.dc_W",
+               "battery.dc_W", "battery.V", "battery.A",
+               "battery.SoC_nom_fract", "battery.temperature_C" },
+    -- No sn: Venus OS exposes no serial over this Modbus map; identity
+    -- resolves via ARP MAC or the configured endpoint.
+    static = { "make" },
   },
 }
 --

@@ -25,10 +25,12 @@ DRIVER_MANIFEST = {
     status = "experimental",
     notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   },
+  poll_interval_ms = 5000,
   requires = {},
   options  = {},
   provides = {
-    live   = { "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
+    live   = { "pv.dc_W", "pv.mppts[]", "pv.total_generation_Wh",
+               "battery.dc_W", "battery.V", "battery.SoC_nom_fract" },
     static = { "make", "sn" },
   },
 }

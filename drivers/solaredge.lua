@@ -29,13 +29,19 @@ DRIVER_MANIFEST = {
     status = "experimental",
     notes  = "Ported from a reference implementation. Curtail path (F000/F001 registers) not yet verified against live hardware on a 42W site.",
   },
+  poll_interval_ms = 5000,
   requires = {},
   options = {
-    { name = "nominal_w", purpose = "control", type = "integer",
-      help = "Inverter nameplate AC power in W, used to convert curtail watt targets to percent." },
+    { name = "nominal_w", purpose = "control", type = "integer", min = 100, max = 200000,
+      help = "Inverter nameplate AC power in W (from the datasheet), used to convert curtail watt targets to a 0-100% Active Power Limit. Curtail is unavailable until set." },
   },
   provides = {
-    live   = { "meter.ac_W", "pv.dc_W" },
+    live   = { "pv.dc_W", "pv.mppts[]", "pv.total_generation_Wh",
+               "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh" },
     static = { "make", "sn" },
   },
 }
@@ -303,20 +309,18 @@ function driver_poll()
         mppt2_v = scale(m2_regs[2], sf.mppt_v)
     end
 
-    -- Emit PV (site convention: generation is negative W)
+    -- Emit PV (site convention: generation is negative W; canonical keys).
+    -- Per-tracker pv_mppt{n}_v/a TS series come from the host's mppts[]
+    -- fan-out — no manual emit_metric needed.
     host.emit("pv", {
-        w           = -ac_w,
-        mppt1_v     = mppt1_v,
-        mppt1_a     = mppt1_a,
-        mppt2_v     = mppt2_v,
-        mppt2_a     = mppt2_a,
-        lifetime_wh = lifetime_wh,
-        temp_c      = temp_c,
+        dc_W                = -ac_w,
+        mppts               = {
+            { V = mppt1_v, A = mppt1_a },
+            { V = mppt2_v, A = mppt2_a },
+        },
+        total_generation_Wh = lifetime_wh,
+        temp_c              = temp_c,
     })
-    host.emit_metric("pv_mppt1_v",      mppt1_v)
-    host.emit_metric("pv_mppt1_a",      mppt1_a)
-    host.emit_metric("pv_mppt2_v",      mppt2_v)
-    host.emit_metric("pv_mppt2_a",      mppt2_a)
     host.emit_metric("inverter_temp_c", temp_c)
     host.emit_metric("grid_hz",         hz)
 
@@ -374,19 +378,19 @@ function driver_poll()
     -- Site: + = into site (import). SolarEdge: + = out (export).
     -- So negate W and A to flip to site convention. V and Hz are unsigned.
     host.emit("meter", {
-        w         = -meter_w,
-        l1_w      = -l1_w,
-        l2_w      = -l2_w,
-        l3_w      = -l3_w,
-        l1_v      = l1_v,
-        l2_v      = l2_v,
-        l3_v      = l3_v,
-        l1_a      = -l1_a,
-        l2_a      = -l2_a,
-        l3_a      = -l3_a,
-        hz        = hz,
-        import_wh = import_wh,
-        export_wh = export_wh,
+        ac_W            = -meter_w,
+        L1_W            = -l1_w,
+        L2_W            = -l2_w,
+        L3_W            = -l3_w,
+        L1_V            = l1_v,
+        L2_V            = l2_v,
+        L3_V            = l3_v,
+        L1_A            = -l1_a,
+        L2_A            = -l2_a,
+        L3_A            = -l3_a,
+        Hz              = hz,
+        total_import_Wh = import_wh,
+        total_export_Wh = export_wh,
     })
     host.emit_metric("meter_l1_w", -l1_w)
     host.emit_metric("meter_l2_w", -l2_w)

@@ -21,13 +21,16 @@ DRIVER_MANIFEST = {
   verification = {
     status = "experimental",
   },
+  poll_interval_ms = 1000,
   requires = {},
   options = {
     { name = "sn", purpose = "always", type = "string",
-      help = "Only aggregate telemetry from this PowerShaper serial." },
+      help = "Only aggregate telemetry from this PowerShaper serial (the <sn> segment of the pixii/status/<sn>/... MQTT topics). Omit on single-unit sites — the driver latches onto the first serial it sees." },
   },
   provides = {
-    live   = { "pv.dc_W", "meter.ac_W" },
+    live   = { "pv.dc_W", "pv.total_generation_Wh",
+               "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V" },
     static = { "make", "sn" },
   },
 }

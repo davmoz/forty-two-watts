@@ -39,20 +39,23 @@ DRIVER_MANIFEST = {
     status = "experimental",
     notes  = "Community-contributed local-API driver; not yet verified against live hardware on a 42w site.",
   },
+  poll_interval_ms = 1000,
   requires = {
     { name = "host", purpose = "always", type = "string",
-      help = "LAN IP of the Sonnen unit." },
+      help = "LAN IP or hostname of the sonnenBatterie (find it in your router's client list)." },
   },
   options = {
-    { name = "port", purpose = "always", type = "integer", min = 1, max = 65535,
-      help = "JSON API port (default 80)." },
+    { name = "port", purpose = "always", type = "integer", default = 80, min = 1, max = 65535,
+      help = "JSON API v2 TCP port. Stock units serve on 80." },
     -- Auth-Token from the Sonnen web UI (Software-Integration -> JSON API).
     -- secret=true: the wizard / Settings UI renders a password input.
     { name = "api_token", purpose = "always", type = "string", secret = true,
-      help = "JSON API v2 Auth-Token from the Sonnen web UI." },
+      help = "JSON API v2 Auth-Token — enable the API in the Sonnen web UI under Software-Integration and copy the token." },
   },
   provides = {
     live   = { "battery.dc_W", "battery.SoC_nom_fract" },
+    -- No sn: the latestdata endpoint carries no serial; identity
+    -- resolves via ARP MAC or the configured endpoint.
     static = { "make" },
   },
 }

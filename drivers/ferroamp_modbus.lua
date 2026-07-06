@@ -11,10 +11,10 @@
 -- Float format: IEEE 754, word-swapped (low word at lower address)
 -- Register map: Ferroamp proprietary (not SunSpec)
 --
--- Sign convention (site/EMS):
---   meter.w  : positive = importing from grid, negative = exporting
---   pv.w     : always <= 0 (generation)
---   battery.w: positive = charging (into battery), negative = discharging
+-- Sign convention (site/EMS, canonical emit keys):
+--   meter.ac_W  : positive = importing from grid, negative = exporting
+--   pv.dc_W     : always <= 0 (generation)
+--   battery.dc_W: positive = charging (into battery), negative = discharging
 --   Ferroamp reports battery power as positive = discharging, so we negate
 --   at the driver boundary to match drivers/ferroamp.lua (the MQTT variant).
 
@@ -34,11 +34,21 @@ DRIVER_MANIFEST = {
     status = "experimental",
     notes  = "Ported from sourceful-hugin. Read-only telemetry; control still goes through drivers/ferroamp.lua (MQTT). Not yet verified against live hardware.",
   },
+  poll_interval_ms = 5000,
   requires = {},
   options  = {},
   provides = {
-    live   = { "meter.ac_W", "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
-    static = { "make", "sn" },
+    live   = { "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh",
+               "pv.dc_W", "pv.total_generation_Wh",
+               "battery.dc_W", "battery.SoC_nom_fract",
+               "battery.total_charge_Wh", "battery.total_discharge_Wh" },
+    -- No sn: the EnergyHub exposes no stable serial register; identity
+    -- resolves via ARP MAC or the configured endpoint.
+    static = { "make" },
   },
 }
 
@@ -178,19 +188,19 @@ function driver_poll()
     end
 
     host.emit("meter", {
-        w         = grid_w,
-        hz        = hz,
-        l1_w      = l1_w,
-        l2_w      = l2_w,
-        l3_w      = l3_w,
-        l1_v      = l1_v,
-        l2_v      = l2_v,
-        l3_v      = l3_v,
-        l1_a      = l1_a,
-        l2_a      = l2_a,
-        l3_a      = l3_a,
-        import_wh = import_wh,
-        export_wh = export_wh,
+        ac_W            = grid_w,
+        Hz              = hz,
+        L1_W            = l1_w,
+        L2_W            = l2_w,
+        L3_W            = l3_w,
+        L1_V            = l1_v,
+        L2_V            = l2_v,
+        L3_V            = l3_v,
+        L1_A            = l1_a,
+        L2_A            = l2_a,
+        L3_A            = l3_a,
+        total_import_Wh = import_wh,
+        total_export_Wh = export_wh,
     })
     -- Diagnostics: long-format TS DB
     host.emit_metric("meter_l1_w", l1_w)
@@ -219,8 +229,8 @@ function driver_poll()
     if ok_pe and pe_regs then pv_lifetime_wh = decode_f32_ws_at(pe_regs, 1) * 1000 end
 
     host.emit("pv", {
-        w           = -pv_w,   -- negative = generation (site convention)
-        lifetime_wh = pv_lifetime_wh,
+        dc_W                = -pv_w,   -- negative = generation (site convention)
+        total_generation_Wh = pv_lifetime_wh,
     })
 
     --------------------------------------------------------------------------
@@ -247,14 +257,14 @@ function driver_poll()
         bat_charge_wh    = decode_f32_ws_at(be_regs, 5) * 1000   -- 6068-6069
     end
 
-    -- Omit soc from the emit table when the read failed — emitting 0
+    -- Omit SoC from the emit table when the read failed — emitting 0
     -- would cause the control loop to think the battery is empty.
     local bat_data = {
-        w            = bat_w,
-        charge_wh    = bat_charge_wh,
-        discharge_wh = bat_discharge_wh,
+        dc_W               = bat_w,
+        total_charge_Wh    = bat_charge_wh,
+        total_discharge_Wh = bat_discharge_wh,
     }
-    if bat_soc ~= nil then bat_data.soc = bat_soc end
+    if bat_soc ~= nil then bat_data.SoC_nom_fract = bat_soc end
     host.emit("battery", bat_data)
 
     return 5000
