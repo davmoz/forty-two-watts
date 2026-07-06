@@ -25,6 +25,7 @@ import (
 	"github.com/frahlg/forty-two-watts/go/internal/battery"
 	"github.com/frahlg/forty-two-watts/go/internal/config"
 	"github.com/frahlg/forty-two-watts/go/internal/control"
+	"github.com/frahlg/forty-two-watts/go/internal/driverregistry"
 	"github.com/frahlg/forty-two-watts/go/internal/drivers"
 	"github.com/frahlg/forty-two-watts/go/internal/evcloud"
 	"github.com/frahlg/forty-two-watts/go/internal/events"
@@ -132,6 +133,11 @@ type Deps struct {
 	DriverMQTTFactory   func(name string, c *config.MQTTConfig) (drivers.MQTTCap, error)
 	DriverModbusFactory func(name string, c *config.ModbusConfig) (drivers.ModbusCap, error)
 	DriverARPLookup     func(host string) (mac string, ok bool)
+
+	// DriverRegistry is the Sourceful driver-registry client (pinned
+	// name@version fetch + local cache). Nil disables /api/registry/*
+	// (returns 503) and registry refs in /api/drivers/test probes.
+	DriverRegistry *driverregistry.Client
 
 	// Optional: background version-check + updater-sidecar dispatch.
 	// Nil disables every /api/version/* endpoint (returns 503).
@@ -260,6 +266,12 @@ type Server struct {
 	savingsCache   map[string]daySavings
 
 	versionUpdateMu sync.Mutex
+
+	// registryCache is the 5-min TTL cache in front of the Sourceful
+	// driver registry (see api_registry.go). Lazily allocated; nil map
+	// is a valid empty cache.
+	registryCacheMu sync.Mutex
+	registryCache   map[string]registryCacheEntry
 }
 
 // New creates a new API server.
@@ -306,6 +318,12 @@ func (s *Server) routes() {
 	s.handle("POST /api/battery_covers_ev", s.handleSetBatteryCoversEV)
 	s.handle("GET  /api/drivers", s.handleDrivers)
 	s.handle("GET  /api/drivers/catalog", s.handleDriversCatalog)
+	// Sourceful driver registry proxy (api_registry.go). The manifest
+	// endpoint GET /api/registry/drivers/{name}/{version}/manifest is
+	// wired once drivers.ParseManifest lands (PR1 manifest-core).
+	s.handle("GET  /api/registry/drivers", s.handleRegistryDrivers)
+	s.handle("GET  /api/registry/drivers/{name}/versions", s.handleRegistryDriverVersions)
+	s.handle("POST /api/registry/refresh", s.handleRegistryRefresh)
 	s.handle("POST /api/drivers/test", s.handleDriverTest)
 	s.handle("GET  /api/drivers/{name}", s.handleDriverDetail)
 	s.handle("GET  /api/drivers/{name}/logs", s.handleDriverLogs)

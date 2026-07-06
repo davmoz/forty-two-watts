@@ -115,8 +115,8 @@ func (s *Server) handleDriverTest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "invalid driver config: " + err.Error()})
 		return
 	}
-	if strings.TrimSpace(cfg.Lua) == "" {
-		writeJSON(w, 400, map[string]string{"error": "missing driver lua path"})
+	if strings.TrimSpace(cfg.Lua) == "" && strings.TrimSpace(cfg.Driver) == "" {
+		writeJSON(w, 400, map[string]string{"error": "missing driver lua path or registry ref"})
 		return
 	}
 
@@ -165,7 +165,11 @@ func (s *Server) handleDriverTest(w http.ResponseWriter, r *http.Request) {
 
 	displayName := strings.TrimSpace(cfg.Name)
 	if displayName == "" {
-		displayName = filepath.Base(cfg.Lua)
+		if cfg.Driver != "" {
+			displayName = cfg.Driver
+		} else {
+			displayName = filepath.Base(cfg.Lua)
+		}
 	}
 	testName := "__test_" + safeProbeName(displayName) + "_" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	cfg.Name = testName
@@ -180,9 +184,17 @@ func (s *Server) handleDriverTest(w http.ResponseWriter, r *http.Request) {
 	reg.MQTTFactory = s.deps.DriverMQTTFactory
 	reg.ModbusFactory = s.deps.DriverModbusFactory
 	reg.ARPLookup = s.deps.DriverARPLookup
-
 	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 	defer cancel()
+	// Probes of registry-ref drivers resolve through the same cache-
+	// first client as the runtime registry (nil = refs refused with a
+	// clear error from Registry.Add). The closure runs inside
+	// reg.Add(ctx, …) below, so it shares the probe's 12 s budget.
+	if s.deps.DriverRegistry != nil {
+		reg.ResolveDriverRef = func(ref string) (string, error) {
+			return s.deps.DriverRegistry.Resolve(ctx, ref)
+		}
+	}
 	started := time.Now()
 	if err := reg.Add(ctx, cfg); err != nil {
 		writeJSON(w, 200, driverProbeResp{
