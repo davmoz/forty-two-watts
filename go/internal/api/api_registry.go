@@ -119,7 +119,7 @@ func (s *Server) handleRegistryDriverManifest(w http.ResponseWriter, r *http.Req
 		writeJSON(w, 400, map[string]string{"error": "missing driver name or version"})
 		return
 	}
-	payload, err := s.registryCached("manifest:"+name+"@"+version, func() (any, error) {
+	payload, err := s.registryCached(registryManifestCacheKey(name+"@"+version), func() (any, error) {
 		src, err := c.Source(r.Context(), name, version)
 		if err != nil {
 			return nil, err

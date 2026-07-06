@@ -1137,6 +1137,17 @@ func (s *Server) handlePostConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "validation: " + err.Error()})
 		return
 	}
+	// Manifest validation (typed per-driver config fields). Returned both
+	// as a joined `error` string (existing UI contract) and as a
+	// `manifest_errors` list so the settings form can render each message
+	// against the offending field. See api_config_manifest.go.
+	if merrs := s.driverManifestErrors(&newCfg); len(merrs) > 0 {
+		writeJSON(w, 400, map[string]any{
+			"error":           "validation: " + strings.Join(merrs, "; "),
+			"manifest_errors": merrs,
+		})
+		return
+	}
 	// Diff against the live config BEFORE we mutate the shared pointer —
 	// otherwise the comparison would always come back empty.
 	s.deps.CfgMu.RLock()
