@@ -10,8 +10,15 @@
   // Collected state
   var configuredDrivers = [];    // array of driver objects ready for config.drivers
   var selectedDevice = null;     // { ip, port, protocol } from scan or manual entry
-  var selectedCatalog = null;    // CatalogEntry from /api/drivers/catalog
+  var selectedCatalog = null;    // manifest-shaped CatalogEntry from /api/drivers/catalog
   var driverCatalog = [];        // full catalog cache
+  var manifestForm = null;       // FTWManifestForm controller for step 5
+  var manifestValues = {};       // typed config values collected by the form
+
+  // Shared DRIVER_MANIFEST → form renderer (settings/manifest-form.js,
+  // loaded before this file). Guarded so the wizard still walks its
+  // steps if the module ever fails to load.
+  var MF = window.FTWManifestForm || null;
 
   // --- Step navigation ---
 
@@ -153,12 +160,11 @@
 
       var label = '';
       if (entry.manufacturer) label += entry.manufacturer + ' ';
-      label += entry.name || entry.filename;
+      label += entry.display_name || entry.name || entry.filename;
+      var types = MF ? MF.liveTypes(entry) : [];
       if (entry.protocols && entry.protocols.length > 0) {
         label += ' (' + entry.protocols.join(', ');
-        if (entry.capabilities && entry.capabilities.length > 0) {
-          label += ', ' + entry.capabilities.join('+');
-        }
+        if (types.length > 0) label += ', ' + types.join('+');
         label += ')';
       }
 
@@ -184,8 +190,16 @@
     selectedCatalog = driverCatalog[parseInt(sel.value, 10)];
     btn.disabled = false;
 
-    if (selectedCatalog.description) {
-      descEl.textContent = selectedCatalog.description;
+    // Verification provenance + tested models double as the driver
+    // description (the manifest DTO has no free-form description field).
+    var descParts = [];
+    var notes = MF ? MF.verificationNotes(selectedCatalog) : '';
+    if (notes) descParts.push(notes);
+    if (selectedCatalog.tested_models && selectedCatalog.tested_models.length > 0) {
+      descParts.push('Tested: ' + selectedCatalog.tested_models.join(', '));
+    }
+    if (descParts.length > 0) {
+      descEl.textContent = descParts.join(' — ');
       descEl.style.display = 'block';
     } else {
       descEl.style.display = 'none';
@@ -221,38 +235,64 @@
       selectedCatalog.protocols.some(function (p) { return p === 'modbus'; });
     document.getElementById('drv-unitid-group').style.display = isModbus ? 'block' : 'none';
 
-    // Show battery capacity if capabilities include battery
-    var hasBattery = selectedCatalog.capabilities &&
-      selectedCatalog.capabilities.some(function (c) { return c === 'battery'; });
-    document.getElementById('drv-battery-group').style.display = hasBattery ? 'block' : 'none';
+    // Show battery capacity if the manifest promises battery telemetry
+    document.getElementById('drv-battery-group').style.display =
+      (MF && MF.emits(selectedCatalog, 'battery')) ? 'block' : 'none';
 
     // First driver defaults to site meter
     document.getElementById('drv-site-meter').checked = configuredDrivers.length === 0;
+    var telemetryCb = document.getElementById('drv-telemetry-only');
+    if (telemetryCb) telemetryCb.checked = false;
 
-    // Default port based on protocol
+    // Default port: manifest connection_defaults first, protocol second
     if (!selectedDevice) {
+      var cd = selectedCatalog.connection_defaults || {};
       var defPort = 502;
       if (selectedCatalog.protocols && selectedCatalog.protocols.indexOf('mqtt') >= 0) defPort = 1883;
       if (selectedCatalog.protocols && selectedCatalog.protocols.indexOf('http') >= 0) defPort = 8080;
+      if (typeof cd.port === 'number') defPort = cd.port;
       document.getElementById('drv-port').value = defPort;
     }
 
-    // Render password inputs for each catalog-declared config secret
-    // (e.g. sonnen Auth-Token). Each input id is "drv-secret-<key>" and
-    // saveDriver reads them back into driver.config[<key>].
-    var secretsGroup = document.getElementById('drv-secrets-group');
-    secretsGroup.innerHTML = '';
-    var secrets = selectedCatalog.config_secrets || [];
-    secrets.forEach(function (key) {
-      var label = key.replace(/_/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); });
-      var fg = document.createElement('div');
-      fg.className = 'form-group';
-      fg.innerHTML =
-        '<label for="drv-secret-' + key + '">' + esc(label) + '</label>' +
-        '<input type="password" id="drv-secret-' + key + '" autocomplete="off" ' +
-        'placeholder="Paste from device web UI">';
-      secretsGroup.appendChild(fg);
-    });
+    renderManifestFields();
+  }
+
+  // Render the driver's DRIVER_MANIFEST requires/options schema as a
+  // typed form (number/checkbox/text/password) via the shared
+  // settings/manifest-form.js renderer. Values land in manifestValues
+  // with correct JSON types; saveDriver copies them into driver.config.
+  function renderManifestFields() {
+    var group = document.getElementById('drv-manifest-group');
+    manifestForm = null;
+    manifestValues = {};
+    if (!group) return;
+    group.innerHTML = '';
+    if (!MF || !selectedCatalog) return;
+
+    var telemetryOnly = function () {
+      var cb = document.getElementById('drv-telemetry-only');
+      return !!(cb && cb.checked);
+    };
+
+    // Seed a declared `host` field from the scanned / manually-entered
+    // device IP so the operator doesn't type it twice.
+    var names = MF.fields(selectedCatalog).map(function (i) { return i.field.name; });
+    if (selectedDevice && selectedDevice.ip && names.indexOf('host') >= 0) {
+      manifestValues.host = selectedDevice.ip;
+    }
+
+    var html = MF.renderFields(selectedCatalog, manifestValues, { telemetryOnly: telemetryOnly() });
+    if (!html) return;
+    group.innerHTML = '<div class="mf-eyebrow">Device settings</div>' + html;
+    manifestForm = MF.wire(group, selectedCatalog, manifestValues, { telemetryOnly: telemetryOnly });
+
+    var cb = document.getElementById('drv-telemetry-only');
+    if (cb && !cb.dataset.mfBound) {
+      cb.dataset.mfBound = '1';
+      cb.addEventListener('change', function () {
+        if (manifestForm) manifestForm.setTelemetryOnly(cb.checked);
+      });
+    }
   }
 
   window.saveDriver = function () {
@@ -263,18 +303,24 @@
     var port = parseInt(document.getElementById('drv-port').value, 10);
     var unitId = parseInt(document.getElementById('drv-unitid').value, 10) || 1;
     var isSiteMeter = document.getElementById('drv-site-meter').checked;
+    var telemetryCb = document.getElementById('drv-telemetry-only');
+    var telemetryOnly = !!(telemetryCb && telemetryCb.checked);
     // Only read battery capacity for drivers that actually support it —
     // the <input> has a default value of 10, so without this gate a
     // PV-only driver (e.g. solaredge_pv) would persist a phantom
     // battery_capacity_wh = 10000 that the control loop later tries to
     // target against a device with no battery.
-    var hasBattery = selectedCatalog && selectedCatalog.capabilities &&
-      selectedCatalog.capabilities.some(function (c) { return c === 'battery'; });
+    var hasBattery = !!(MF && selectedCatalog && MF.emits(selectedCatalog, 'battery'));
     var batteryKwh = hasBattery
       ? (parseFloat(document.getElementById('drv-battery-kwh').value) || 0)
       : 0;
 
     if (!ip) { alert('IP address is required.'); return; }
+
+    // Manifest-declared required fields must be filled (control-purpose
+    // fields are waived in read-only mode). The form controller marks
+    // the offending inputs inline.
+    if (manifestForm && manifestForm.validate().length > 0) return;
 
     // Determine protocol from catalog entry
     var protocol = 'modbus';
@@ -299,36 +345,23 @@
       driver.capabilities.mqtt = { host: ip, port: port };
     } else if (protocol === 'http') {
       driver.capabilities.http = { allowed_hosts: [ip] };
-      // connection_defaults.host is declared only by drivers that take a
-      // user-configurable local endpoint — seed config.host from the IP the
-      // user just entered. Cloud drivers (Easee etc.) declare http_hosts
-      // for allowed-hosts handling but have no connection_defaults.host;
-      // their vendor endpoint is hardcoded and they key off
-      // config.email/password instead, so leave config untouched here.
-      var connDefaults = (selectedCatalog && selectedCatalog.connection_defaults) || {};
-      // connection_defaults.host being declared (even when empty) is the
-      // signal that this driver takes a user-configurable local endpoint.
-      // Cloud drivers don't declare it and key off email/password.
-      if (Object.prototype.hasOwnProperty.call(connDefaults, 'host')) {
-        driver.config = driver.config || {};
-        driver.config.host = ip;
-      }
+    } else if (protocol === 'websocket') {
+      driver.capabilities.websocket = { allowed_hosts: [ip] };
+    } else if (protocol === 'tcp') {
+      driver.capabilities.tcp = { allowed_hosts: [ip] };
     }
 
-    // Persist per-driver secrets the prefill rendered (api_token, etc.)
-    // into driver.config.<key>. Lives OUTSIDE the protocol branches so
-    // a future Modbus/MQTT driver that declares config_secrets still
-    // captures them — the previous version silently dropped operator-
-    // entered secrets for any driver whose top-protocol wasn't http.
-    var secrets = (selectedCatalog && selectedCatalog.config_secrets) || [];
-    secrets.forEach(function (key) {
-      var el = document.getElementById('drv-secret-' + key);
-      if (!el) return;
-      var v = (el.value || '').trim();
-      if (v === '') return;
+    if (telemetryOnly) driver.telemetry_only = true;
+
+    // Manifest-collected settings (typed: numbers/booleans/strings). A
+    // declared `host` field was prefilled from the device IP by
+    // renderManifestFields, so cloud drivers (no host field) stay
+    // untouched and local-endpoint drivers get config.host for free.
+    var keys = Object.keys(manifestValues || {});
+    if (keys.length > 0) {
       driver.config = driver.config || {};
-      driver.config[key] = v;
-    });
+      keys.forEach(function (k) { driver.config[k] = manifestValues[k]; });
+    }
 
     // If this is the site meter, uncheck others
     if (isSiteMeter) {
@@ -341,6 +374,8 @@
     configuredDrivers.push(driver);
     selectedDevice = null;
     selectedCatalog = null;
+    manifestForm = null;
+    manifestValues = {};
     goStep(6);
   };
 
@@ -354,6 +389,9 @@
       detail = d.capabilities.mqtt.host + ':' + d.capabilities.mqtt.port;
     } else if (d.capabilities.http) {
       detail = (d.config && d.config.host) || (d.capabilities.http.allowed_hosts || [])[0] || '';
+    } else if (d.capabilities.websocket || d.capabilities.tcp) {
+      var cap = d.capabilities.websocket || d.capabilities.tcp;
+      detail = (d.config && d.config.host) || (cap.allowed_hosts || [])[0] || '';
     }
     var tags = [];
     if (d.is_site_meter) tags.push('site meter');
