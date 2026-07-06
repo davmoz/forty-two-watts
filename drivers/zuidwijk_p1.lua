@@ -23,16 +23,21 @@ DRIVER_MANIFEST = {
     status = "experimental",
     notes  = "Implemented from DSMR 5.0 spec; not yet exercised against live hardware.",
   },
+  poll_interval_ms = 1000,
   requires = {
     { name = "host", purpose = "always", type = "string",
-      help = "IP of the P1 Reader Ethernet bridge." },
+      help = "IP of the P1 Reader Ethernet bridge (e.g. 192.168.1.40 — find it in your router's client list)." },
   },
   options = {
-    { name = "port", purpose = "always", type = "integer", min = 1, max = 65535,
-      help = "Raw TCP port (default 23)." },
+    { name = "port", purpose = "always", type = "integer", default = 23, min = 1, max = 65535,
+      help = "Raw TCP port the bridge streams DSMR telegrams on. Stock firmware uses 23." },
   },
   provides = {
-    live   = { "meter.ac_W" },
+    live   = { "meter.ac_W",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh" },
     static = { "make", "sn" },
   },
 }

@@ -39,16 +39,20 @@ DRIVER_MANIFEST = {
   verification = {
     status = "experimental",
   },
+  poll_interval_ms = 2000,
   requires = {
     { name = "api_key", purpose = "always", type = "string", secret = true,
       help = "Personal access token from https://developer.tibber.com/settings/access-token. Needs at least read access to home + liveMeasurement." },
   },
   options = {
     { name = "home_id", purpose = "always", type = "string",
-      help = "UUID of the home to subscribe to. Auto-resolved from /viewer/homes if omitted." },
+      help = "UUID of the home to subscribe to. Auto-resolved when the account has exactly one home; REQUIRED on multi-home accounts (the driver refuses to guess)." },
   },
   provides = {
-    live   = { "meter.ac_W" },
+    live   = { "meter.ac_W",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.total_import_Wh", "meter.total_export_Wh" },
     static = { "make", "sn" },
   },
 }

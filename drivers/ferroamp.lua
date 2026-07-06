@@ -21,21 +21,32 @@ DRIVER_MANIFEST = {
     verified_at = "2026-04-18",
     notes       = "In continuous use on 3-phase 16A SE site, MPC + dispatch control loop exercised daily.",
   },
+  poll_interval_ms = 1000,
   requires = {},
   -- config.eso_capacity_kwh (map of ESO id -> kWh) is also read but is a
   -- table value, which the manifest field schema cannot express yet.
   options = {
-    { name = "skip_battery", purpose = "always", type = "boolean",
-      help = "Suppress battery telemetry + control for PV-only EnergyHubs." },
-    { name = "charge_ceil_soc", purpose = "control", type = "double", min = 0, max = 1,
-      help = "Charge ceiling as a 0..1 SoC fraction (default 0.95)." },
-    { name = "discharge_floor_soc", purpose = "control", type = "double", min = 0, max = 1,
-      help = "Discharge floor as a 0..1 SoC fraction (default 0.15)." },
-    { name = "pplim_release_w", purpose = "control", type = "double",
-      help = "SSO pplim released on curtail_disable, in W. 0 = never publish a release (operator clears pplim manually)." },
+    { name = "skip_battery", purpose = "always", type = "boolean", default = false,
+      help = "Suppress battery telemetry + control for PV-only EnergyHubs (they still publish phantom ESO frames)." },
+    { name = "charge_ceil_soc", purpose = "control", type = "double", default = 0.95, min = 0.01, max = 1,
+      help = "Charge ceiling as a 0..1 SoC fraction. ESOs above it are counted charge-incapable for dispatch scaling." },
+    { name = "discharge_floor_soc", purpose = "control", type = "double", default = 0.15, min = 0, max = 0.99,
+      help = "Discharge floor as a 0..1 SoC fraction. ESOs below it are counted discharge-incapable for dispatch scaling." },
+    { name = "pplim_release_w", purpose = "control", type = "double", default = 0, min = 0, max = 1000000,
+      help = "SSO pplim published on curtail_disable, in W — set to the SSO nominal max (e.g. 15000). 0 = never publish a release (operator clears pplim from the Ferroamp portal); avoids the sticky pplim=0 trap." },
   },
   provides = {
-    live   = { "meter.ac_W", "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
+    live   = { "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh",
+               "pv.dc_W",
+               "battery.dc_W", "battery.V", "battery.A",
+               "battery.SoC_nom_fract",
+               "battery.total_charge_Wh", "battery.total_discharge_Wh" },
+    -- No sn: the EnergyHub's extapi doesn't publish a serial; identity
+    -- resolves via ARP MAC (MQTT broker = the EnergyHub itself).
     static = { "make" },
   },
 }
