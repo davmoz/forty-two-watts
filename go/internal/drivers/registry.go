@@ -29,6 +29,12 @@ type Registry struct {
 	// ARPLookup resolves a hostname/IP to a MAC for L2-stable identity.
 	// Optional — when nil, devices fall back to endpoint-hash IDs.
 	ARPLookup func(host string) (mac string, ok bool)
+	// ResolveDriverRef resolves a pinned registry ref (cfg.Driver,
+	// "name@version") to a local Lua file path — wired in main.go from
+	// the driverregistry.Client (cache-first, offline-safe on a warm
+	// cache). Nil means registry refs are unsupported: a driver
+	// configured with `driver:` is refused with a clear error.
+	ResolveDriverRef func(ref string) (path string, err error)
 
 	mu  sync.Mutex
 	rec map[string]*runningDriver
@@ -119,8 +125,23 @@ func (r *Registry) Add(ctx context.Context, cfg config.Driver) error {
 	}
 	r.mu.Unlock()
 
-	if cfg.Lua == "" {
-		return fmt.Errorf("driver %q: must specify `lua` path", cfg.Name)
+	// Resolve the Lua source: a pinned registry ref (cfg.Driver) wins,
+	// otherwise cfg.Lua is a local path. config.Validate enforces the
+	// exactly-one-of rule; a resolve failure (cache miss + fetch fail)
+	// refuses the driver — a warm cache never touches the network.
+	luaPath := cfg.Lua
+	if cfg.Driver != "" {
+		if r.ResolveDriverRef == nil {
+			return fmt.Errorf("driver %q: registry ref %q set but no driver-registry resolver is configured", cfg.Name, cfg.Driver)
+		}
+		p, err := r.ResolveDriverRef(cfg.Driver)
+		if err != nil {
+			return fmt.Errorf("driver %q: resolve registry ref %q: %w", cfg.Name, cfg.Driver, err)
+		}
+		luaPath = p
+	}
+	if luaPath == "" {
+		return fmt.Errorf("driver %q: must specify `lua` path or `driver` registry ref", cfg.Name)
 	}
 
 	env := NewHostEnv(cfg.Name, r.tel)
@@ -181,7 +202,7 @@ func (r *Registry) Add(ctx context.Context, cfg config.Driver) error {
 		}
 	}
 
-	luaDrv, err := NewLuaDriver(cfg.Lua, env)
+	luaDrv, err := NewLuaDriver(luaPath, env)
 	if err != nil {
 		return fmt.Errorf("load lua: %w", err)
 	}
@@ -221,7 +242,7 @@ func (r *Registry) Add(ctx context.Context, cfg config.Driver) error {
 		r.tel.EnsureDriverHealth(cfg.Name)
 	}
 	go r.runLoop(rd)
-	slog.Info("driver added", "name", cfg.Name, "path", cfg.Lua)
+	slog.Info("driver added", "name", cfg.Name, "path", luaPath)
 	return nil
 }
 
@@ -586,6 +607,7 @@ func findDriver(list []config.Driver, name string) (config.Driver, bool) {
 
 func sameDriverConfig(a, b config.Driver) bool {
 	if a.Lua != b.Lua ||
+		a.Driver != b.Driver ||
 		a.IsSiteMeter != b.IsSiteMeter ||
 		a.BatteryCapacityWh != b.BatteryCapacityWh ||
 		a.Disabled != b.Disabled {
