@@ -147,12 +147,14 @@ func sawMetricValue(samples []telemetry.MetricSample, driver, metric string, val
 }
 
 const registryRestartTestDriver = `
+DRIVER_MANIFEST = { name = "restart-test", version = "0.0.0", role = "meter" }
 function driver_init(config) end
 function driver_poll() return 1000 end
 function driver_command(action, w, cmd) end
 `
 
 const registryTroubleshootingTestDriver = `
+DRIVER_MANIFEST = { name = "troubleshooting-test", version = "0.0.0", role = "meter" }
 function driver_init(config)
   local enabled = 0
   if config ~= nil and config._troubleshooting_mode == true then
@@ -346,6 +348,7 @@ func TestRunLoopRecordsSuccessEvenWithoutEmits(t *testing.T) {
 	r := NewRegistry(telemetry.NewStore())
 	// Driver polls every 50 ms but emits nothing.
 	src := `
+DRIVER_MANIFEST = { name = "tick-test", version = "0.0.0", role = "meter" }
 function driver_init(config) host.set_poll_interval(50) end
 function driver_poll() return 50 end
 function driver_command(action, w, cmd) end

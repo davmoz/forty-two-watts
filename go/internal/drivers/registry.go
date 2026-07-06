@@ -50,6 +50,16 @@ func (r *Registry) SetTroubleshootingMode(enabled bool) {
 	r.mu.Unlock()
 }
 
+// recordAddFailure surfaces a refused driver in /api/status so the
+// operator sees WHY it isn't running, not just that it's absent.
+func (r *Registry) recordAddFailure(name, msg string) {
+	if r.tel == nil {
+		return
+	}
+	r.tel.EnsureDriverHealth(name)
+	r.tel.RecordDriverError(name, msg)
+}
+
 // driverRuntime abstracts the Lua driver lifecycle so the registry's
 // run-loop, command dispatch, and health tracking stay clean.
 type driverRuntime interface {
@@ -77,12 +87,12 @@ func (l *luaRuntime) DefaultMode(ctx context.Context) error { return l.LuaDriver
 func (l *luaRuntime) Cleanup(ctx context.Context) error     { l.LuaDriver.Cleanup(); return nil }
 func (l *luaRuntime) Env() *HostEnv                         { return l.LuaDriver.Env }
 
-func driverInitConfigJSON(cfg config.Driver, troubleshootingMode bool) []byte {
-	if len(cfg.Config) == 0 && !troubleshootingMode {
+func driverInitConfigJSON(cfgMap map[string]any, troubleshootingMode bool) []byte {
+	if len(cfgMap) == 0 && !troubleshootingMode {
 		return nil
 	}
-	m := make(map[string]any, len(cfg.Config)+1)
-	for k, v := range cfg.Config {
+	m := make(map[string]any, len(cfgMap)+1)
+	for k, v := range cfgMap {
 		m[k] = v
 	}
 	if troubleshootingMode {
@@ -96,6 +106,10 @@ type runningDriver struct {
 	driver driverRuntime
 	env    *HostEnv
 	cfg    config.Driver
+	// warmupUntil suppresses command dispatch (Send) until it passes.
+	// Set once in Add after the "init" verb when the driver requested a
+	// settle hold via host.set_warmup_s; guarded by Registry.mu.
+	warmupUntil time.Time
 	// Poll loop coordination
 	cmdCh chan driverCmd
 	stop  chan bool
@@ -123,7 +137,30 @@ func (r *Registry) Add(ctx context.Context, cfg config.Driver) error {
 		return fmt.Errorf("driver %q: must specify `lua` path", cfg.Name)
 	}
 
+	// Manifest gate: parse DRIVER_MANIFEST in a sandboxed VM, validate
+	// the operator config against it, and apply option defaults — all
+	// before any capability connection is opened or driver_init runs.
+	// A missing or malformed manifest refuses the driver outright.
+	man, err := LoadManifest(cfg.Lua)
+	if err != nil {
+		r.recordAddFailure(cfg.Name, err.Error())
+		return fmt.Errorf("driver %q: manifest: %w", cfg.Name, err)
+	}
+	if errs := man.ValidateConfig(cfg.Config, cfg.TelemetryOnly); len(errs) > 0 {
+		for _, e := range errs {
+			slog.Error("driver config rejected by manifest",
+				"name", cfg.Name, "driver", man.Name+"@"+man.Version, "err", e)
+		}
+		r.recordAddFailure(cfg.Name, strings.Join(errs, "; "))
+		return fmt.Errorf("driver %q: config failed manifest validation (%d error(s)): %s",
+			cfg.Name, len(errs), strings.Join(errs, "; "))
+	}
+	initConfig := man.ApplyDefaults(cfg.Config)
+
 	env := NewHostEnv(cfg.Name, r.tel)
+	if man.PollIntervalMS > 0 {
+		env.setPollInterval(int32(man.PollIntervalMS))
+	}
 	env.BatteryCapacityWh = cfg.BatteryCapacityWh
 	if mq := cfg.EffectiveMQTT(); mq != nil && r.MQTTFactory != nil {
 		cap, err := r.MQTTFactory(cfg.Name, mq)
@@ -191,9 +228,10 @@ func (r *Registry) Add(ctx context.Context, cfg config.Driver) error {
 	troubleshootingMode := r.troubleshootingMode
 	r.mu.Unlock()
 
-	// Pass the driver's config map as JSON to driver_init, with reserved
-	// host-level keys injected only at runtime.
-	initCfg := driverInitConfigJSON(cfg, troubleshootingMode)
+	// Pass the driver's config map (manifest defaults applied) as JSON
+	// to driver_init, with reserved host-level keys injected only at
+	// runtime.
+	initCfg := driverInitConfigJSON(initConfig, troubleshootingMode)
 	if err := drv.Init(ctx, initCfg); err != nil {
 		drv.Cleanup(ctx)
 		return fmt.Errorf("driver_init: %w", err)
@@ -207,6 +245,25 @@ func (r *Registry) Add(ctx context.Context, cfg config.Driver) error {
 		stop:   make(chan bool, 1),
 		done:   make(chan struct{}),
 	}
+
+	// Control-arm verb: control-capable drivers get a one-shot
+	// driver_command("init", 0) after driver_init (blixt contract —
+	// Remote-Mode enable, device watchdog arm, etc. live there, keeping
+	// driver_init read-only). Drivers without an init handler return
+	// false / nothing: debug-log only, never an error. The runLoop
+	// hasn't started yet, so calling the runtime directly is safe.
+	if !cfg.TelemetryOnly {
+		initVerb, _ := json.Marshal(map[string]any{"action": "init", "power_w": 0})
+		if err := drv.Command(ctx, initVerb); err != nil {
+			slog.Debug("driver init verb not handled", "name", cfg.Name, "err", err)
+		}
+		if w := env.Warmup(); w > 0 {
+			rd.warmupUntil = time.Now().Add(w)
+			slog.Info("driver warmup hold — command dispatch suppressed",
+				"name", cfg.Name, "warmup", w)
+		}
+	}
+
 	r.mu.Lock()
 	r.rec[cfg.Name] = rd
 	r.mu.Unlock()
@@ -236,6 +293,17 @@ func (r *Registry) runLoop(rd *runningDriver) {
 		select {
 		case skipDefault := <-rd.stop:
 			if !skipDefault {
+				// Explicit safe-revert verb first (blixt contract:
+				// zero setpoint, disable remote mode), then the ftw
+				// default-mode hook. Telemetry-only drivers never see
+				// command verbs; a missing deinit handler is debug
+				// noise, not an error.
+				if !rd.cfg.TelemetryOnly {
+					deinitVerb, _ := json.Marshal(map[string]any{"action": "deinit", "power_w": 0})
+					if err := rd.driver.Command(ctx, deinitVerb); err != nil {
+						slog.Debug("driver deinit verb not handled", "name", rd.cfg.Name, "err", err)
+					}
+				}
 				_ = rd.driver.DefaultMode(ctx)
 			}
 			_ = rd.driver.Cleanup(ctx)
@@ -327,13 +395,26 @@ func (r *Registry) remove(name string, skipDefault bool) {
 }
 
 // Send dispatches a command JSON blob to a specific driver. Blocks until the
-// driver's runLoop processes it or ctx expires.
+// driver's runLoop processes it or ctx expires. Telemetry-only drivers
+// and drivers inside their post-init warmup hold refuse commands with a
+// clear error (SendDefault — the watchdog safety path — is unaffected).
 func (r *Registry) Send(ctx context.Context, name string, payload []byte) error {
 	r.mu.Lock()
 	rd, ok := r.rec[name]
+	var warmupUntil time.Time
+	if ok {
+		warmupUntil = rd.warmupUntil
+	}
 	r.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("driver %q not found", name)
+	}
+	if rd.cfg.TelemetryOnly {
+		return fmt.Errorf("driver %q is telemetry-only: command dispatch disabled", name)
+	}
+	if remaining := time.Until(warmupUntil); remaining > 0 {
+		return fmt.Errorf("driver %q warming up: command dispatch suppressed for another %s",
+			name, remaining.Round(time.Second))
 	}
 	resCh := make(chan error, 1)
 	select {
@@ -588,7 +669,8 @@ func sameDriverConfig(a, b config.Driver) bool {
 	if a.Lua != b.Lua ||
 		a.IsSiteMeter != b.IsSiteMeter ||
 		a.BatteryCapacityWh != b.BatteryCapacityWh ||
-		a.Disabled != b.Disabled {
+		a.Disabled != b.Disabled ||
+		a.TelemetryOnly != b.TelemetryOnly {
 		return false
 	}
 	aMq, bMq := a.EffectiveMQTT(), b.EffectiveMQTT()
