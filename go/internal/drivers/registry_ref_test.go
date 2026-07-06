@@ -24,6 +24,9 @@ func writeRefTestDriver(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "deye-3.1.1.lua")
 	src := `
+DRIVER_MANIFEST = {
+    name = "deye", version = "3.1.1", role = "battery",
+}
 function driver_init(config) end
 function driver_poll() end
 `

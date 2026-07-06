@@ -162,7 +162,7 @@ func (r *Registry) Add(ctx context.Context, cfg config.Driver) error {
 	// the operator config against it, and apply option defaults — all
 	// before any capability connection is opened or driver_init runs.
 	// A missing or malformed manifest refuses the driver outright.
-	man, err := LoadManifest(cfg.Lua)
+	man, err := LoadManifest(luaPath)
 	if err != nil {
 		r.recordAddFailure(cfg.Name, err.Error())
 		return fmt.Errorf("driver %q: manifest: %w", cfg.Name, err)

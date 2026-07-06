@@ -318,11 +318,10 @@ func (s *Server) routes() {
 	s.handle("POST /api/battery_covers_ev", s.handleSetBatteryCoversEV)
 	s.handle("GET  /api/drivers", s.handleDrivers)
 	s.handle("GET  /api/drivers/catalog", s.handleDriversCatalog)
-	// Sourceful driver registry proxy (api_registry.go). The manifest
-	// endpoint GET /api/registry/drivers/{name}/{version}/manifest is
-	// wired once drivers.ParseManifest lands (PR1 manifest-core).
+	// Sourceful driver registry proxy (api_registry.go).
 	s.handle("GET  /api/registry/drivers", s.handleRegistryDrivers)
 	s.handle("GET  /api/registry/drivers/{name}/versions", s.handleRegistryDriverVersions)
+	s.handle("GET  /api/registry/drivers/{name}/{version}/manifest", s.handleRegistryDriverManifest)
 	s.handle("POST /api/registry/refresh", s.handleRegistryRefresh)
 	s.handle("POST /api/drivers/test", s.handleDriverTest)
 	s.handle("GET  /api/drivers/{name}", s.handleDriverDetail)

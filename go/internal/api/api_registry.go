@@ -7,15 +7,10 @@
 //
 // Endpoints (nil Deps.DriverRegistry → 503):
 //
-//	GET  /api/registry/drivers                 — registry index
-//	GET  /api/registry/drivers/{name}/versions — published versions
-//	POST /api/registry/refresh                 — flush the TTL cache
-//
-// GET /api/registry/drivers/{name}/{version}/manifest (fetch source via
-// Client.Source → drivers.ParseManifest → manifest JSON) intentionally
-// does NOT ship in this file yet: drivers.ParseManifest lands with the
-// PR1 manifest-core branch. The integrator wires that endpoint after
-// both PRs merge — see docs/driver-registry.md ("API endpoints").
+//	GET  /api/registry/drivers                            — registry index
+//	GET  /api/registry/drivers/{name}/versions            — published versions
+//	GET  /api/registry/drivers/{name}/{version}/manifest  — parsed DRIVER_MANIFEST
+//	POST /api/registry/refresh                            — flush the TTL cache
 package api
 
 import (
@@ -23,6 +18,7 @@ import (
 	"time"
 
 	"github.com/frahlg/forty-two-watts/go/internal/driverregistry"
+	"github.com/frahlg/forty-two-watts/go/internal/drivers"
 )
 
 // registryCacheTTL — see the file comment for why 5 minutes.
@@ -101,6 +97,38 @@ func (s *Server) handleRegistryDriverVersions(w http.ResponseWriter, r *http.Req
 			return nil, err
 		}
 		return map[string]any{"name": name, "versions": vs}, nil
+	})
+	if err != nil {
+		writeJSON(w, 502, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, payload)
+}
+
+// GET /api/registry/drivers/{name}/{version}/manifest — fetch the pinned
+// driver source from the registry and return its parsed DRIVER_MANIFEST
+// as JSON. This is what the settings UI renders the per-driver config
+// form from (requires/options field schema).
+func (s *Server) handleRegistryDriverManifest(w http.ResponseWriter, r *http.Request) {
+	c := s.registryClient(w)
+	if c == nil {
+		return
+	}
+	name, version := r.PathValue("name"), r.PathValue("version")
+	if name == "" || version == "" {
+		writeJSON(w, 400, map[string]string{"error": "missing driver name or version"})
+		return
+	}
+	payload, err := s.registryCached("manifest:"+name+"@"+version, func() (any, error) {
+		src, err := c.Source(r.Context(), name, version)
+		if err != nil {
+			return nil, err
+		}
+		man, err := drivers.ParseManifest(string(src))
+		if err != nil {
+			return nil, err
+		}
+		return man, nil
 	})
 	if err != nil {
 		writeJSON(w, 502, map[string]string{"error": err.Error()})

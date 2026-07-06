@@ -25,6 +25,19 @@ func newRegistryTestServer(t *testing.T, hits *atomic.Int64) *Server {
 		hits.Add(1)
 		_, _ = w.Write([]byte(`{"versions":[{"version":"3.1.1"},{"version":"3.1.0"}]}`))
 	})
+	mux.HandleFunc("GET /deye/3.1.1", func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte(`DRIVER_MANIFEST = {
+			name = "deye", version = "3.1.1", role = "battery",
+			requires = {
+				{ name = "battery_capacity_wh", purpose = "control",
+				  type = "integer", min = 1000, max = 1000000,
+				  help = "Usable capacity in Wh." },
+			},
+		}
+		function driver_init(config) end
+		function driver_poll() end`))
+	})
 	upstream := httptest.NewServer(mux)
 	t.Cleanup(upstream.Close)
 	client := driverregistry.New(upstream.URL, t.TempDir())
@@ -95,6 +108,33 @@ func TestRegistryDriverVersions(t *testing.T) {
 	}
 }
 
+func TestRegistryDriverManifest(t *testing.T) {
+	var hits atomic.Int64
+	srv := newRegistryTestServer(t, &hits)
+
+	code, body := doJSON(t, srv, http.MethodGet, "/api/registry/drivers/deye/3.1.1/manifest")
+	if code != 200 {
+		t.Fatalf("status = %d, body = %v", code, body)
+	}
+	if body["name"] != "deye" || body["version"] != "3.1.1" || body["role"] != "battery" {
+		t.Errorf("manifest header = %v", body)
+	}
+	reqs, ok := body["requires"].([]any)
+	if !ok || len(reqs) != 1 {
+		t.Fatalf("requires = %v", body["requires"])
+	}
+	f := reqs[0].(map[string]any)
+	if f["name"] != "battery_capacity_wh" || f["type"] != "integer" || f["min"] != float64(1000) {
+		t.Errorf("field = %v", f)
+	}
+
+	// Served from the TTL cache on repeat.
+	doJSON(t, srv, http.MethodGet, "/api/registry/drivers/deye/3.1.1/manifest")
+	if got := hits.Load(); got != 1 {
+		t.Errorf("upstream hits = %d, want 1 (TTL cache)", got)
+	}
+}
+
 func TestRegistryRefreshFlushesCache(t *testing.T) {
 	var hits atomic.Int64
 	srv := newRegistryTestServer(t, &hits)
@@ -147,6 +187,7 @@ func TestRegistryEndpointsWithoutClient503(t *testing.T) {
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodGet, "/api/registry/drivers"},
 		{http.MethodGet, "/api/registry/drivers/deye/versions"},
+		{http.MethodGet, "/api/registry/drivers/deye/3.1.1/manifest"},
 		{http.MethodPost, "/api/registry/refresh"},
 	} {
 		if code, _ := doJSON(t, srv, tc.method, tc.path); code != 503 {
