@@ -968,10 +968,12 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // driverSecretKeys returns a map[lua-path]→[]secret-key built from the
-// drivers/ catalog. Used by handleGetConfig + handlePostConfig to scope
-// which `Driver.Config[*]` keys participate in the mask/restore cycle.
-// On catalog read errors returns nil — handlers then skip the secrets
-// pass entirely (fail-open: they still mask the structured fields).
+// drivers/ catalog. Secret keys are the manifest requires/options
+// fields marked `secret = true`. Used by handleGetConfig +
+// handlePostConfig to scope which `Driver.Config[*]` keys participate
+// in the mask/restore cycle. On catalog read errors returns nil —
+// handlers then skip the secrets pass entirely (fail-open: they still
+// mask the structured fields).
 func (s *Server) driverSecretKeys() map[string][]string {
 	dir := s.deps.DriverDir
 	if dir == "" {
@@ -983,17 +985,18 @@ func (s *Server) driverSecretKeys() map[string][]string {
 	}
 	out := make(map[string][]string, len(entries))
 	for _, e := range entries {
-		if len(e.ConfigSecrets) == 0 {
+		secrets := e.SecretKeys()
+		if len(secrets) == 0 {
 			continue
 		}
 		path := filepath.ToSlash(e.Path)
-		out[path] = e.ConfigSecrets
+		out[path] = secrets
 		base := filepath.ToSlash(filepath.Base(dir))
 		if rel, ok := strings.CutPrefix(path, base+"/"); ok {
 			// Config round-trips paths resolved via -drivers as
 			// "drivers/<rel>" regardless of the actual directory name.
 			// Keep catalog secret matching on that portable alias too.
-			out[filepath.ToSlash(filepath.Join("drivers", rel))] = e.ConfigSecrets
+			out[filepath.ToSlash(filepath.Join("drivers", rel))] = secrets
 		}
 	}
 	return out
