@@ -10,21 +10,51 @@
 --   v2x_charger.w > 0 = vehicle charging
 --   v2x_charger.w < 0 = vehicle discharging into site/grid
 
-DRIVER = {
-  id = "ferroamp-dc2-v2x",
-  name = "Ferroamp DC2 V2X",
+DRIVER_MANIFEST = {
+  name         = "ferroamp-dc2-v2x",
+  version      = "1.1.0",
+  role         = "ev",
+  display_name = "Ferroamp DC2 V2X",
   manufacturer = "Ferroamp",
-  version = "1.1.0",
-  protocols = { "mqtt" },
-  capabilities = { "v2x_charger" },
-  description = "Ferroamp DC2 V2X 20 kW bidirectional CCS2 charger via local MQTT.",
-  homepage = "https://ferroamp.com",
-  verification_status = "experimental",
-  verification_notes = "Implements DC2 V2X integration manual 2026-04-22. Hardware sign and droop limits still need live verification before automatic V2G dispatch.",
+  protocols    = { "mqtt" },
   connection_defaults = {
     port = 1883,
     username = "dc2",
     password = "dc2mqtt!",
+  },
+  verification = {
+    status = "experimental",
+    notes  = "Implements DC2 V2X integration manual 2026-04-22. Hardware sign and droop limits still need live verification before automatic V2G dispatch.",
+  },
+  requires = {},
+  options = {
+    { name = "serial", purpose = "always", type = "string",
+      help = "Charger serial number. Anchors device identity (make:serial) when not readable off the broker." },
+    { name = "rated_power_w", purpose = "always", type = "integer",
+      default = 20000, min = 1000, max = 50000,
+      help = "Charger nameplate power in W. DC2 V2X is 20 kW." },
+    { name = "max_current_a", purpose = "control", type = "integer",
+      default = 50, min = 6, max = 100,
+      help = "DC current ceiling in A for charge/discharge setpoints." },
+    { name = "controller_topic", purpose = "control", type = "string",
+      default = "dc2/ui/control/controller",
+      help = "MQTT topic that selects the active controller. Leave default unless the charger firmware remaps it." },
+    { name = "power_topic", purpose = "control", type = "string",
+      default = "dc2/ui/control/power",
+      help = "MQTT topic for the percent power setpoint. Leave default unless remapped." },
+    { name = "controller_value", purpose = "control", type = "string",
+      default = "MQTT",
+      help = "Controller name to claim on the controller topic before writing setpoints." },
+    { name = "connector_index", purpose = "always", type = "integer",
+      default = 0, min = 0, max = 8,
+      help = "Scope telemetry to one connector on a multi-connector DC2. 0 accepts every connector." },
+    { name = "telemetry_max_age_ms", purpose = "always", type = "integer",
+      default = 15000, min = 1000, max = 120000,
+      help = "Drop cached MQTT values older than this before emitting (ms)." },
+  },
+  provides = {
+    live   = { "v2x_charger.w" },
+    static = { "make" },
   },
 }
 

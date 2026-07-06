@@ -44,10 +44,10 @@ func TestFerroampModbusLoads(t *testing.T) {
 	}
 }
 
-// TestFerroampModbusCatalogEntry verifies the DRIVER metadata block
-// parses cleanly and advertises the correct id / capabilities. Distinct
-// id from the existing "ferroamp" driver is the contract that lets both
-// ship side-by-side.
+// TestFerroampModbusCatalogEntry verifies the DRIVER_MANIFEST parses
+// cleanly and advertises the correct name / role. A distinct manifest
+// name from the existing "ferroamp" driver is the contract that lets
+// both ship side-by-side.
 func TestFerroampModbusCatalogEntry(t *testing.T) {
 	entries, err := LoadCatalog("../../../drivers")
 	if err != nil {
@@ -55,13 +55,16 @@ func TestFerroampModbusCatalogEntry(t *testing.T) {
 	}
 	var found *CatalogEntry
 	for i, e := range entries {
-		if e.ID == "ferroamp-modbus" {
+		if e.ID == "ferroamp_modbus" {
 			found = &entries[i]
 			break
 		}
 	}
 	if found == nil {
-		t.Fatalf("ferroamp-modbus not in catalog (got %d entries)", len(entries))
+		t.Fatalf("ferroamp_modbus not in catalog (got %d entries)", len(entries))
+	}
+	if found.Name != "ferroamp-modbus" {
+		t.Errorf("manifest name: got %q want ferroamp-modbus (distinct from ferroamp)", found.Name)
 	}
 	if found.Manufacturer != "Ferroamp" {
 		t.Errorf("manufacturer: got %q want Ferroamp", found.Manufacturer)
@@ -72,10 +75,7 @@ func TestFerroampModbusCatalogEntry(t *testing.T) {
 			t.Errorf("unexpected protocol %q", p)
 		}
 	}
-	wantCaps := map[string]bool{"meter": true, "pv": true, "battery": true}
-	for _, c := range found.Capabilities {
-		if !wantCaps[c] {
-			t.Errorf("unexpected capability %q", c)
-		}
+	if found.Role != "hybrid" {
+		t.Errorf("role: got %q want hybrid (meter + pv + battery)", found.Role)
 	}
 }

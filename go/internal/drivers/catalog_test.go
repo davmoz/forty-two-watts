@@ -6,18 +6,20 @@ import (
 	"testing"
 )
 
+func writeCatalogDriver(t *testing.T, dir, filename, name string) {
+	t.Helper()
+	src := "DRIVER_MANIFEST = {\n  name = \"" + name + "\",\n  version = \"0.1.0\",\n  role = \"meter\",\n}\n"
+	if err := os.WriteFile(filepath.Join(dir, filename), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLoadCatalogUsesPortableDriverPath(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "custom-driver-dir")
 	if err := os.Mkdir(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "custom.lua"), []byte(`DRIVER = {
-  id = "custom"
-  name = "Custom"
-}
-`), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeCatalogDriver(t, dir, "custom.lua", "custom")
 
 	entries, err := LoadCatalog(dir)
 	if err != nil {
@@ -28,6 +30,9 @@ func TestLoadCatalogUsesPortableDriverPath(t *testing.T) {
 	}
 	if entries[0].Path != "drivers/custom.lua" {
 		t.Fatalf("catalog path = %q, want portable drivers/custom.lua", entries[0].Path)
+	}
+	if entries[0].ID != "custom" {
+		t.Fatalf("catalog id = %q, want file stem custom", entries[0].ID)
 	}
 }
 
@@ -42,19 +47,11 @@ func TestLoadCatalogMultiUnionAndFirstWins(t *testing.T) {
 	}
 
 	// shared.lua exists in both dirs — user version should win.
-	userShared := "DRIVER = {\n  id = \"shared_user\",\n  name = \"Shared User\"\n}\n"
-	bundledShared := "DRIVER = {\n  id = \"shared_bundled\",\n  name = \"Shared Bundled\"\n}\n"
-	if err := os.WriteFile(filepath.Join(userDir, "shared.lua"), []byte(userShared), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(bundledDir, "shared.lua"), []byte(bundledShared), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeCatalogDriver(t, userDir, "shared.lua", "shared_user")
+	writeCatalogDriver(t, bundledDir, "shared.lua", "shared_bundled")
 
 	// bundled.lua only in bundled dir.
-	if err := os.WriteFile(filepath.Join(bundledDir, "bundled.lua"), []byte("DRIVER = {\n  id = \"bundled_only\",\n  name = \"Bundled Only\"\n}\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeCatalogDriver(t, bundledDir, "bundled.lua", "bundled_only")
 
 	entries, err := LoadCatalogMulti(userDir, bundledDir)
 	if err != nil {
@@ -71,8 +68,8 @@ func TestLoadCatalogMultiUnionAndFirstWins(t *testing.T) {
 
 	if e, ok := byFilename["shared.lua"]; !ok {
 		t.Fatal("shared.lua missing from catalog")
-	} else if e.ID != "shared_user" {
-		t.Errorf("shared.lua: want id=shared_user (user wins), got %q", e.ID)
+	} else if e.Name != "shared_user" {
+		t.Errorf("shared.lua: want name=shared_user (user wins), got %q", e.Name)
 	}
 
 	if _, ok := byFilename["bundled.lua"]; !ok {
@@ -85,9 +82,7 @@ func TestLoadCatalogMultiMissingDirSkipped(t *testing.T) {
 	if err := os.Mkdir(bundledDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bundledDir, "drv.lua"), []byte("DRIVER = {\n  id = \"x\",\n  name = \"X\"\n}\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeCatalogDriver(t, bundledDir, "drv.lua", "x")
 
 	// nonexistent is fine — should be silently skipped.
 	entries, err := LoadCatalogMulti("/nonexistent/path/that/does/not/exist", bundledDir)
@@ -96,5 +91,23 @@ func TestLoadCatalogMultiMissingDirSkipped(t *testing.T) {
 	}
 	if len(entries) != 1 {
 		t.Fatalf("want 1 entry from bundledDir, got %d", len(entries))
+	}
+}
+
+// A driver whose manifest fails to parse must be skipped, not blank the
+// whole catalog.
+func TestLoadCatalogSkipsMalformedManifest(t *testing.T) {
+	dir := t.TempDir()
+	writeCatalogDriver(t, dir, "good.lua", "good")
+	if err := os.WriteFile(filepath.Join(dir, "broken.lua"),
+		[]byte("DRIVER_MANIFEST = { name = \"broken\" }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := LoadCatalog(dir)
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	if len(entries) != 1 || entries[0].ID != "good" {
+		t.Fatalf("want only the good entry, got %+v", entries)
 	}
 }

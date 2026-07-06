@@ -15,11 +15,14 @@ func TestDriverSecretKeysIncludePortableDriverPathAlias(t *testing.T) {
 	}
 	luaPath := filepath.Join(driverDir, "sonnen.lua")
 	if err := os.WriteFile(luaPath, []byte(`
-DRIVER = {
-  id = "sonnen",
+DRIVER_MANIFEST = {
   name = "sonnen",
+  version = "1.0.0",
+  role = "battery",
   protocols = { "http" },
-  config_secrets = { "api_token" },
+  options = {
+    { name = "api_token", purpose = "always", type = "string", secret = true },
+  },
 }
 `), 0644); err != nil {
 		t.Fatal(err)

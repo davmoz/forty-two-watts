@@ -29,6 +29,7 @@ import (
 	"github.com/frahlg/forty-two-watts/go/internal/control"
 	"github.com/frahlg/forty-two-watts/go/internal/currency"
 	"github.com/frahlg/forty-two-watts/go/internal/devtools"
+	"github.com/frahlg/forty-two-watts/go/internal/driverregistry"
 	"github.com/frahlg/forty-two-watts/go/internal/drivers"
 	"github.com/frahlg/forty-two-watts/go/internal/events"
 	"github.com/frahlg/forty-two-watts/go/internal/forecast"
@@ -270,6 +271,25 @@ func main() {
 		return modbuscli.Dial(c.Host, c.Port, c.UnitID)
 	}
 	reg.ARPLookup = arp.Lookup
+	// Sourceful driver-registry client: resolves pinned `driver:
+	// name@version` refs cache-first from <state dir>/driver-cache, so
+	// a warm cache keeps registry drivers working fully offline. Base
+	// URL precedence: DRIVER_REGISTRY_URL env > driver_registry.url >
+	// driver_registry.net (default devnet). See docs/driver-registry.md.
+	drvRegCacheDir := cfg.DriverRegistryCacheDir()
+	if drvRegCacheDir == "" {
+		drvRegCacheDir = filepath.Join(filepath.Dir(statePath), "driver-cache")
+	}
+	drvReg := driverregistry.New(cfg.DriverRegistryBaseURL(), drvRegCacheDir)
+	slog.Info("driver registry client ready", "base", drvReg.BaseURL, "cache", drvRegCacheDir)
+	reg.ResolveDriverRef = func(ref string) (string, error) {
+		// Registry.Add runs on boot/reload paths without a deadline;
+		// bound the fetch here so a dead WAN can't stall driver spawn
+		// beyond the client's own 10 s HTTP timeout + retry slack.
+		rctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		return drvReg.Resolve(rctx, ref)
+	}
 	// Spawn initial drivers. config.Load has already joined relative Lua
 	// paths with the config directory — nothing to resolve here.
 	for _, d := range cfg.Drivers {
@@ -1544,6 +1564,7 @@ func main() {
 		DriverMQTTFactory:   reg.MQTTFactory,
 		DriverModbusFactory: reg.ModbusFactory,
 		DriverARPLookup:     reg.ARPLookup,
+		DriverRegistry:      drvReg,
 		Models:              models, ModelsMu: modelsMu,
 		SelfTune:   selfTune,
 		DtS:        float64(cfg.Site.ControlIntervalS),

@@ -1902,3 +1902,124 @@ body.advanced #ui-mode-toggle { color: #fbbf24; }
 .tune-delta-positive { color: #22c55e; }
 .tune-delta-negative { color: #ef4444; }
 .tune-delta-neutral { color: var(--text-dim); }
+
+/* ---- Manifest-driven driver settings form (settings/manifest-form.js).
+   Shared by the Settings Devices tab and the /setup wizard. Uses the
+   next-era oklch tokens per DESIGN.md — no legacy hex palette. ---- */
+.mf-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mf-eyebrow {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--fg-muted);
+  font-weight: 500;
+  margin: 12px 0 6px;
+}
+.mf-field > label:not(.mf-check) {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--fg-muted);
+  font-weight: 500;
+  margin: 0 0 4px;
+}
+.mf-field input[type="text"],
+.mf-field input[type="number"],
+.mf-field input[type="password"],
+.mf-field select {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--ink-raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 0.9rem;
+}
+.mf-field input:focus,
+.mf-field select:focus {
+  border-color: var(--accent-e);
+  outline: none;
+}
+.mf-hint {
+  color: var(--fg-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  margin-top: 2px;
+}
+.mf-req {
+  color: var(--accent-e);
+  font-weight: 600;
+}
+.mf-field-error {
+  color: var(--red-e);
+  font-size: 0.75rem;
+  margin-top: 2px;
+}
+.mf-field.mf-invalid input,
+.mf-field.mf-invalid select {
+  border-color: var(--red-e);
+}
+.mf-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: normal;
+}
+/* Read-only (telemetry only): control-purpose fields become optional —
+   de-emphasized, required marker hidden, no client required gate. */
+.mf-telemetry-only .mf-field[data-mf-control] {
+  opacity: 0.55;
+}
+.mf-telemetry-only .mf-field[data-mf-control] .mf-req {
+  display: none;
+}
+.mf-banner-error {
+  border: 1px solid var(--red-e);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 8px 0;
+  color: var(--red-e);
+  font-size: 0.8rem;
+  background: color-mix(in srgb, var(--red-e) 8%, transparent);
+}
+/* Bundled | Sourceful registry source toggle in the add-driver flow. */
+.mf-source-toggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+.mf-source-btn {
+  background: transparent;
+  border: none;
+  color: var(--fg-dim);
+  padding: 7px 14px;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  cursor: pointer;
+}
+.mf-source-btn + .mf-source-btn {
+  border-left: 1px solid var(--line);
+}
+.mf-source-btn.active {
+  background: var(--accent-e);
+  color: #0a0a0a; /* on-accent text is near-black per DESIGN.md */
+}
+.mf-registry-status {
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+  margin-left: 8px;
+}
+.mf-registry-status.error { color: var(--red-e); }

@@ -321,6 +321,9 @@ func TestHandleV2XCommandForcesZeroPowerForNonSetpointActions(t *testing.T) {
 
 	// Lua driver whose command hook records the power_w it was handed.
 	const src = `
+DRIVER_MANIFEST = {
+  name = "fake-v2x", version = "0.0.1", role = "ev",
+}
 function driver_init(config) end
 function driver_poll() return 1000 end
 function driver_command(action, w, cmd)

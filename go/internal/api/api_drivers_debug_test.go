@@ -125,6 +125,7 @@ func TestHandleDriverTestRunsLuaProbe(t *testing.T) {
 	dir := t.TempDir()
 	luaPath := filepath.Join(dir, "probe_emit.lua")
 	luaSrc := `
+DRIVER_MANIFEST = { name = "probe_emit", version = "0.0.0", role = "meter" }
 function driver_init(config)
     host.set_make("Acme")
     host.set_sn("SN-PROBE-1")

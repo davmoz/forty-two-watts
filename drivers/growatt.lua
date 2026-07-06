@@ -15,22 +15,36 @@
 -- The native meter register is already positive=import, so it maps
 -- to site convention without a flip.
 
-DRIVER = {
-  id           = "growatt",
-  name         = "Growatt hybrid inverter",
-  manufacturer = "Growatt",
+DRIVER_MANIFEST = {
+  name         = "growatt",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "Growatt hybrid inverter",
+  manufacturer = "Growatt",
   protocols    = { "modbus" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "Growatt SPH / MOD hybrid inverters via Modbus TCP.",
-  homepage     = "https://www.growatt.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "SPH", "MOD" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "SPH", "MOD" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  poll_interval_ms = 5000,
+  requires = {},
+  options  = {},
+  provides = {
+    live   = { "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.total_import_Wh", "meter.total_export_Wh",
+               "pv.dc_W", "pv.mppts[]", "pv.total_generation_Wh",
+               "battery.dc_W", "battery.V",
+               "battery.SoC_nom_fract", "battery.temperature_C" },
+    -- No sn: this register map has no stable serial read; identity
+    -- resolves via ARP MAC or the configured endpoint.
+    static = { "make" },
   },
 }
 

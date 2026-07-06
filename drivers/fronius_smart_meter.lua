@@ -8,22 +8,32 @@
 --   host.decode_u32/i32     → _be variants
 --   host.decode_f32         → inline IEEE-754 (two u16, big-endian words)
 
-DRIVER = {
-  id           = "fronius-smart-meter",
-  name         = "Fronius Smart Meter",
-  manufacturer = "Fronius",
+DRIVER_MANIFEST = {
+  name         = "fronius-smart-meter",
   version      = "1.0.0",
+  role         = "meter",
+  display_name = "Fronius Smart Meter",
+  manufacturer = "Fronius",
   protocols    = { "modbus" },
-  capabilities = { "meter" },
-  description  = "Fronius Smart Meter three-phase energy meter via Modbus TCP (SunSpec).",
-  homepage     = "https://www.fronius.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "Smart Meter 50kA-3", "Smart Meter 63A-3", "Smart Meter TS 65A-3" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "Smart Meter 50kA-3", "Smart Meter 63A-3", "Smart Meter TS 65A-3" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  poll_interval_ms = 5000,
+  requires = {},
+  options  = {},
+  provides = {
+    live   = { "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh" },
+    static = { "make", "sn" },
   },
 }
 --

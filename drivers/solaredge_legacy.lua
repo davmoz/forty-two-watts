@@ -27,22 +27,31 @@
 --     installations) won't reply to this and we log a clear failure
 --     instead of silently emitting zeros forever.
 
-DRIVER = {
-  id           = "solaredge-legacy",
-  name         = "SolarEdge legacy (K-series with display)",
-  manufacturer = "SolarEdge",
+DRIVER_MANIFEST = {
+  name         = "solaredge-legacy",
   version      = "0.2.0",
+  role         = "pv",
+  display_name = "SolarEdge legacy (K-series with display)",
+  manufacturer = "SolarEdge",
   protocols    = { "modbus" },
-  capabilities = { "pv", "pv-curtail" },
-  description  = "SolarEdge K-series (SE7K / SE10K / SE17K / SE25K) PV inverter via Modbus TCP — reads use FC 0x03 holding; curtail writes use FC 0x10 multi-holding on the same Advanced Power Control registers (0xF000/0xF001) as HD-Wave.",
-  homepage     = "https://www.solaredge.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "SE17K (display, legacy firmware)" },
-  verification_status = "experimental",
-  verification_notes = "First-cut clone of solaredge.lua targeting K-series display inverters. Curtail path mirrors solaredge.lua (verified there in 25/50/75% sweep on HD-Wave 8 kW). K-series support documented in SolarEdge Power Reduction Application Note but not yet verified on this firmware family.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "SE17K (display, legacy firmware)" },
+  verification = {
+    status = "experimental",
+    notes  = "First-cut clone of solaredge.lua targeting K-series display inverters. Curtail path mirrors solaredge.lua (verified there in 25/50/75% sweep on HD-Wave 8 kW). K-series support documented in SolarEdge Power Reduction Application Note but not yet verified on this firmware family.",
+  },
+  poll_interval_ms = 5000,
+  requires = {},
+  options = {
+    { name = "nominal_w", purpose = "control", type = "integer", min = 100, max = 200000,
+      help = "Inverter nameplate AC power in W (from the datasheet), used to convert curtail watt targets to a 0-100% Active Power Limit. Curtail is unavailable until set." },
+  },
+  provides = {
+    live   = { "pv.dc_W", "pv.mppts[]", "pv.total_generation_Wh" },
+    static = { "make", "sn" },
   },
 }
 --

@@ -7,22 +7,37 @@
 -- Tested: ET-Plus, EH series (GoodWe v2 LAN+WiFi dongle required)
 -- READ-ONLY: control not implemented.
 
-DRIVER = {
-  id           = "goodwe",
-  name         = "GoodWe hybrid inverter",
-  manufacturer = "GoodWe",
+DRIVER_MANIFEST = {
+  name         = "goodwe",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "GoodWe hybrid inverter",
+  manufacturer = "GoodWe",
   protocols    = { "modbus" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "GoodWe ET-Plus / EH series hybrid inverters via Modbus TCP.",
-  homepage     = "https://en.goodwe.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "ET-Plus", "EH series" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "ET-Plus", "EH series" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  poll_interval_ms = 5000,
+  requires = {},
+  options  = {},
+  provides = {
+    live   = { "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh",
+               "pv.dc_W", "pv.mppts[]", "pv.total_generation_Wh",
+               "battery.dc_W", "battery.V", "battery.A",
+               "battery.SoC_nom_fract", "battery.temperature_C" },
+    -- No sn: GoodWe exposes no stable serial register on this map;
+    -- identity resolves via ARP MAC or the configured endpoint.
+    static = { "make" },
   },
 }
 

@@ -3,22 +3,34 @@
 -- Emits: Meter telemetry only. Read-only.
 -- Protocol: Modbus TCP/RTU, INPUT registers, IEEE 754 F32 BE pairs.
 
-DRIVER = {
-  id           = "sdm630",
-  name         = "Eastron SDM630 meter",
-  manufacturer = "Eastron",
+DRIVER_MANIFEST = {
+  name         = "sdm630",
   version      = "1.0.0",
+  role         = "meter",
+  display_name = "Eastron SDM630 meter",
+  manufacturer = "Eastron",
   protocols    = { "modbus" },
-  capabilities = { "meter" },
-  description  = "Eastron SDM630 and SDM72D-M three-phase energy meters via Modbus TCP/RTU.",
-  homepage     = "https://www.eastrongroup.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "SDM630 Modbus", "SDM72D-M" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "SDM630 Modbus", "SDM72D-M" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  poll_interval_ms = 5000,
+  requires = {},
+  options  = {},
+  provides = {
+    live   = { "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh" },
+    -- No sn: the SDM630 has no serial-number register; identity
+    -- resolves via ARP MAC or the configured endpoint.
+    static = { "make" },
   },
 }
 --

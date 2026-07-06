@@ -1,213 +1,239 @@
 # Writing a Lua driver
 
-A driver is a single Lua file that translates one physical device (inverter,
-battery, meter, gateway) into the EMS's unified telemetry and control
-vocabulary. This guide is the authoritative path for new drivers on v2.1+.
+A driver is a single Lua file that translates one physical device
+(inverter, battery, meter, EV charger, gateway) into the EMS's unified
+telemetry and control vocabulary. This guide is the authoritative path
+for new drivers.
 
-Reference implementations to copy from:
+Start here:
 
-- `drivers/sungrow.lua` — full Modbus TCP example with SN read, battery
-  control, curtailment, watchdog fallback.
-- `drivers/ferroamp.lua` — full MQTT example with cached topic state,
-  multi-topic enrichment, JSON command payloads.
+- `drivers/skeleton.lua` — the annotated template. **Copy this file.**
+- [`docs/driver-manifest.md`](driver-manifest.md) — the `DRIVER_MANIFEST`
+  contract in full (field schema, parse rules, lifecycle verbs, canonical
+  emit keys).
+- [`docs/host-api.md`](host-api.md) — every `host.*` function.
 
-The host side lives in `go/internal/drivers/lua.go` (every `host.*`
-function), `go/internal/drivers/host.go` (the env that backs them), and
-`go/internal/drivers/registry.go` (spawn / poll / command dispatch).
+Reference implementations worth reading whole:
+
+- `drivers/sungrow.lua` — Modbus TCP with SN read, battery control,
+  curtailment, watchdog fallback, canonical emit keys.
+- `drivers/ferroamp.lua` — MQTT with cached topic state, per-unit
+  aggregation, JSON command payloads.
+- `drivers/tibber.lua` — WebSocket subscription + HTTP bootstrap.
+- `drivers/zuidwijk_p1.lua` — raw-TCP stream parsing (DSMR framing).
+
+The host side lives in `go/internal/drivers/`: `manifest.go` (manifest
+parse + config validation), `lua.go` (the `host.*` surface),
+`emit_adapter.go` (canonical emit-key normalization), `registry.go`
+(spawn / poll / command dispatch).
 
 ## 1. Why Lua
 
-Lua via [gopher-lua](https://github.com/yuin/gopher-lua) is the current
-driver runtime. The reasons, in order of how much they matter:
+Lua via [gopher-lua](https://github.com/yuin/gopher-lua) is the driver
+runtime. In order of how much it matters:
 
-- **Contributor-friendly**: no toolchain to install. Edit a `.lua` file
-  and restart — no `cargo`, no `wasm-opt`, no cross-compile.
-- **Hot-editable on the device**: the operator can `ssh` into a Zap, tweak
-  a register offset, restart, done. This is load-bearing for field work.
-- **Small host surface**: the Lua host is one Go file plus the capability
-  environment, with no separate cross-compiled driver artifact.
-- **Good enough performance**: a poll at 1 Hz that reads a dozen Modbus
-  registers and emits three telemetry tables is nowhere near the Lua VM
-  budget. The EMS's hot loop is the controller, not the driver.
-
-The legacy WASM runtime has been removed. New and bundled drivers are
-plain `.lua` files.
+- **Contributor-friendly**: no toolchain. Edit a `.lua` file and
+  restart.
+- **Hot-editable on the device**: `ssh` in, tweak a register offset,
+  restart, done. Load-bearing for field work.
+- **Registry-portable**: the same contract runs on other Sourceful
+  hosts (blixt); drivers can be fetched pinned from the Sourceful
+  registry (`docs/driver-registry.md`).
+- **Good enough performance**: a 1 Hz poll reading a dozen Modbus
+  registers is nowhere near the VM budget. The EMS's hot loop is the
+  controller, not the driver.
 
 ## 2. The contract
 
-Every Lua driver lives in `drivers/` and defines one metadata table plus
-five top-level functions. The runtime calls them in this order:
+Every driver defines one static `DRIVER_MANIFEST` table plus five
+lifecycle functions. The host runs them in this order:
 
 ```
-NewLuaDriver(path)  → file loaded, top-level runs once (DRIVER table populated)
-driver_init(cfg)    → one-shot setup (subscribe, read SN, verify limits)
-driver_poll()       → called forever; returns next-poll-ms
-driver_command(…)   → on each EMS control tick
-driver_default_mode() → watchdog fallback if EMS goes offline
-driver_cleanup()    → on shutdown / reload
+load file            → top-level runs in a sandboxed VM, DRIVER_MANIFEST parsed
+validate config      → typed fields, inclusive bounds, ALL errors at once;
+                       any error refuses the driver before it ever runs
+apply option defaults
+driver_init(config)  → one-shot READ-ONLY identification (set_make/sn/…)
+driver_command("init", 0)   → control-capable drivers only: arm control mode
+warmup hold          → if driver_init called host.set_warmup_s(n)
+driver_poll()        → forever; returns next-poll-ms
+driver_command(…)    → on each EMS control tick
+…
+clean stop           → driver_command("deinit", 0)  — explicit safe revert
+                     → driver_default_mode()        — watchdog/shutdown fallback
+                     → driver_cleanup()
 ```
 
-### 2.1 The DRIVER metadata table
+A **missing or malformed manifest is a load error** — the driver
+refuses to start. The old `DRIVER = {…}` regex-scraped block is gone.
 
-The `DRIVER` global is parsed by the catalog loader
-(`go/internal/drivers/catalog.go`) via regex — no Lua VM is spun up. That
-means the metadata is readable even from a broken driver, and it's what
-populates the Settings → Devices "Add from catalog" dropdown.
+### 2.1 The manifest
 
 ```lua
-DRIVER = {
-  id           = "my-device",
-  name         = "My Device Brand X",
+DRIVER_MANIFEST = {
+  name    = "my-device",      -- registry name; match the file stem
+  version = "0.1.0",          -- semver
+  role    = "battery",        -- battery|meter|pv|ev|heat-pump|hybrid
+
+  poll_interval_ms = 5000,    -- optional cadence floor; absent/0 = host default
+
+  -- ftw catalog extensions (optional):
+  display_name = "My Device Brand X",
   manufacturer = "BrandCo",
-  version      = "1.0.0",
-  protocols    = { "modbus" },          -- or { "mqtt" } or both
-  capabilities = { "meter", "pv", "battery" },
-  description  = "Short blurb describing the device.",
-  homepage     = "https://example.com",
-  authors      = { "Your Name" },
-  tested_models = { "BX-5000", "BX-10000" },
+  protocols    = { "modbus" },              -- mqtt|modbus|http|websocket|tcp
+  connection_defaults = { port = 502, unit_id = 1 },
+  tested_models = { "BX-5000" },
+  verification  = { status = "experimental" },  -- experimental|beta|production
+
+  -- Config fields the driver READS. Declare every single one — a
+  -- contract test greps driver bodies for config.<key> accesses and
+  -- fails CI on undeclared keys (and on declared-but-never-read keys).
+  requires = {
+    { name = "battery_capacity_wh", purpose = "control",
+      type = "integer", min = 1000, max = 1000000,
+      help = "Total usable capacity in Wh. Cannot be read off the bus." },
+  },
+  options = {
+    { name = "max_c_rate", purpose = "control",
+      type = "double", default = 1.0, min = 0.1, max = 5.0,
+      help = "Battery max C-rate. 1.0 = rated power == capacity per hour." },
+    -- { name = "api_token", purpose = "always", type = "string",
+    --   secret = true, help = "…" },   -- secret → password input + masking
+  },
+
+  -- Emit contract: live = canonical keys promised per poll,
+  -- static = host.set_* fields promised after driver_init.
+  provides = {
+    live   = { "battery.dc_W", "battery.SoC_nom_fract" },
+    static = { "make", "model", "sn", "rated_w" },
+  },
 }
 ```
 
-Keep it well-formed: the regex in `catalog.go:95` requires a
-`DRIVER = { … \n}` block with plain `key = "value"` string fields and
-`key = { "a", "b" }` lists. If the regex can't pick up your metadata,
-your driver still runs — it just won't show up in the UI.
+Field rules that trip people up:
+
+- `purpose = "always"` means "needed even to read the device";
+  `purpose = "control"` means "needed only to write setpoints" —
+  control fields are skipped when the operator sets
+  `telemetry_only: true`, so declare capacities, SoC floors/ceilings,
+  and nameplate ratings as `control`.
+- `default` values must match the in-driver fallback (if your Lua does
+  `config.foo or 42`, the manifest option defaults to `42` — the host
+  merges defaults before `driver_init`, and the two must agree).
+- `min`/`max` are inclusive and only valid on numeric types. Give every
+  bound a physical justification (ports 1..65535, SoC 0..100, IEC 61851
+  charge current ≥ 6 A, …).
+- `help` is mandatory in practice: it renders under the form field and
+  inside validation errors. Write it for an operator — what the field
+  is, where to find the value, and the unit.
+- `secret = true` on tokens/passwords → password input in the UI and
+  config masking.
+
+`go/internal/drivers/manifest_audit_test.go` enforces most of this
+mechanically against every bundled driver.
 
 ### 2.2 The lifecycle functions
 
 ```lua
--- One-time setup. Subscribe to MQTT topics, read SN over Modbus, etc.
+-- READ-ONLY identification. No bus writes here — control arming lives
+-- in driver_command("init"). config has manifest defaults applied.
 function driver_init(config)
     host.set_make("BrandCo")
-    -- ... read serial number, log ...
-    -- host.set_sn(serial)
+    host.set_model("BX-5000")
+    host.set_sn(read_serial())     -- make+sn anchor the persistent device_id
+    host.set_rated_w(5000)
+    -- host.set_warmup_s(5)        -- settle hold at 0 W after the init verb
+    return true
 end
 
--- Called repeatedly. Return the next-poll-interval in milliseconds.
--- Cadence ≈ 1 Hz is plenty for home batteries.
+-- Periodic state read. Return the next-poll-interval in ms.
 function driver_poll()
-    -- Pull MQTT messages OR read Modbus registers
-    -- Emit telemetry: host.emit("meter"|"pv"|"battery", { … })
-    return 5000   -- ms until next call
+    -- read bus → decode → host.emit(...) each live field once
+    return 5000
 end
 
--- Receive a control command from the EMS.
---   action  = "init" | "battery" | "curtail" | "curtail_disable" | "deinit"
---   power_w = positive = charge, negative = discharge, 0 = revert to self-consumption
---   cmd     = full decoded command table (extra fields, if any)
-function driver_command(action, power_w, cmd)
-    if action == "battery" then
-        return set_battery_power(power_w)
-    end
+-- CONTROL. All bus writes live here. Never crash on an unknown action.
+--   "init"     value 0 — arm control mode (Remote Mode, device watchdog)
+--   "battery"  value = signed W (site convention) — the setpoint write
+--   "deinit"   value 0 — safe revert on clean stop
+--   ftw extras: "curtail" / "curtail_disable" (PV export limiting),
+--   loadpoint verbs for EV chargers.
+function driver_command(action, value, cmd)
+    if action == "battery" then return set_battery_power(value) end
+    if action == "init" or action == "deinit" then return true end
     return false
 end
 
--- Watchdog fallback when the EMS goes offline. ALWAYS revert to a safe
--- autonomous state so the device doesn't get stuck in a forced mode.
+-- Watchdog / shutdown fallback: ALWAYS revert to safe autonomous
+-- self-consumption, assuming nothing about current control state.
 function driver_default_mode()
     set_self_consumption()
 end
 
--- Cleanup at shutdown / reload. Clear cached tables, close anything you own.
 function driver_cleanup()
-    set_self_consumption()
+    -- resource release before the VM closes; capability connections
+    -- are closed by the host.
 end
 ```
 
-All five are optional — a missing function is a no-op (see
-`lua.go:80`, `95`, `119`, `154`). But a real driver defines all of them:
-you cannot participate in EMS control without `driver_command`, and
-skipping `driver_default_mode` means your device stays in forced mode if
-the EMS crashes.
+Dispatch is serialized per driver — you will never see two callbacks
+racing for the same VM.
 
-Dispatch is serialized per driver (`registry.go:188`), so you will never
-see two callbacks racing for the same VM.
+## 3. Telemetry: canonical emit keys
 
-## 3. The host API
-
-Everything below is exposed as a `host.*` global. The authoritative list
-is `go/internal/drivers/lua.go` — grep for `RawSetString` to see every
-entry. The function signatures here match that file exactly.
-
-### 3.1 Logging and identity
-
-| Call | Purpose |
-|---|---|
-| `host.log(level, message)` | `level = "debug" \| "info" \| "warn" \| "error"`. Routed to `slog` (`host.go:88`). |
-| `host.set_make(name)` | Manufacturer string. Feeds device_id resolution. |
-| `host.set_sn(serial)` | Serial number. Promotes device_id to canonical `make:serial`. |
-| `host.set_poll_interval(ms)` | Request a different poll cadence. Same effect as returning `ms` from `driver_poll`. |
-| `host.millis()` | Monotonic milliseconds since host startup (`host.go:83`). |
-| `host.persist_secret(key, value) → ok, err` | Durably store a rotated secret (e.g. an OAuth `refresh_token`) for THIS driver. Written to the unwatched state KV — **not** `config.yaml` — so persisting can't trigger a config-reload restart loop. The value is layered back over `config.<key>` at the next `driver_init` (`SecretOverride`), so it survives a restart while `config.yaml` keeps the bootstrap seed the UI shows as "saved". Returns `false, err` if the host didn't grant it. |
-
-Use `host.persist_secret` only for values the *provider* rotates out from
-under you (rotating refresh tokens). Operator-entered credentials belong in
-`config.<key>` (declared in `config_secrets`); don't write those back.
-
-Call `set_make` and `set_sn` as early as you reliably can — before them,
-the device shows up under its config name only.
-
-### 3.2 Telemetry
-
-The shared telemetry shape is a JSON-flat table keyed on `type`. Extra
-fields beyond the standard ones are preserved verbatim in the reading's
-`Data` payload for the UI and API (`host.go:117`).
+`host.emit(event, table)` reads keys by **exact case**. New drivers
+emit the canonical @srcful/data-models vocabulary:
 
 ```lua
 host.emit("meter", {
-    w         = 1500,    -- required. Positive = importing, negative = exporting.
-    l1_w      = 500,     -- per-phase power (W)
-    l1_v      = 230.1,   -- per-phase voltage (V)
-    hz        = 50.01,   -- grid frequency
-    import_wh = 12345.6, -- lifetime counter
-    export_wh = 7890.1,
+    ac_W = 1500,             -- + import / − export
+    Hz   = 50.01,
+    L1_V = 230.1, L1_A = 2.2, L1_W = 500,   -- … L2, L3
+    total_import_Wh = 12345.6,
+    total_export_Wh = 7890.1,
 })
 
 host.emit("pv", {
-    w           = -3200, -- required. ALWAYS negative (generation flows out of the array).
-    mppt1_v     = 380.5,
-    lifetime_wh = 1234567,
-    rated_w     = 6000,
+    dc_W = -3200,            -- ALWAYS ≤ 0 (generation)
+    total_generation_Wh = 1234567,
+    mppts = {                -- one row per real tracker; the host fans
+        { V = 380.5, A = -4.2, W = -1600 },  -- these out to pv_mppt{n}_v/a/w
+        { V = 391.0, A = -4.1, W = -1600 },  -- TS series + legacy Data keys
+    },
 })
 
 host.emit("battery", {
-    w            = 2000, -- required. Positive = charging (energy INTO battery),
-                         --           negative = discharging.
-    soc          = 0.65, -- 0.0 to 1.0 fraction (NOT percent)
-    v            = 48.2,
-    a            = 41.5,
-    charge_wh    = 98765,
-    discharge_wh = 54321,
+    dc_W = 2000,             -- + charging / − discharging
+    SoC_nom_fract = 0.65,    -- 0..1 FRACTION, not percent
+    V = 48.2, A = 41.5,
+    temperature_C = 21.5,
+    total_charge_Wh = 98765,
+    total_discharge_Wh = 54321,
 })
 
-host.emit("ev", {
-    w          = 7200,  -- required. Charge power in W (positive when pulling
-                        -- from the grid). Zero when plug is idle.
-    connected  = true,  -- required. Plug inserted in the car.
-    charging   = true,  -- required. Current is actually flowing.
-    session_wh = 14500, -- optional. Energy delivered this plug session.
-    max_a      = 16,    -- optional. Charger current cap.
-    phases     = 3,     -- optional. 1 or 3.
+host.emit("ev", {            -- ftw shape (no canonical EV schema yet)
+    w = 7200,                -- + when charging, 0 when idle
+    connected = true, charging = true,
+    session_wh = 14500, max_a = 16, phases = 3,
 })
 
-host.emit("v2x_charger", {
-    w                  = -5000, -- required. Positive = charging vehicle,
-                                --           negative = V2X discharge.
-    vehicle_soc        = 0.64,  -- 0.0 to 1.0 fraction (NOT percent)
-    connected          = true,
-    dc_w               = -5200,
-    session_discharge_wh = 1250,
-    rated_power_w      = 20000,
+host.emit("vehicle", {       -- read-only BMS readings (tesla_vehicle.lua)
+    soc = 0.64,              -- 0..1 fraction
+    charge_limit_pct = 80, charging_state = "Charging",
 })
 ```
 
-EV readings feed directly into the dispatch clamp that keeps home
-batteries from discharging into the car (`dispatch.go`). If your driver
-only knows `w`, set `connected = (w > 0)` and `charging = (w > 0)`.
+The adapter in `emit_adapter.go` normalizes canonical keys into the
+telemetry store's shape and mirrors them onto the legacy snake_case
+Data names (`L1_A` → `l1_a`, `temperature_C` → `temp_c`,
+`total_import_Wh` → `import_wh`, …) so existing consumers (per-phase
+fuse guard, Nova adapter, UI) keep working. ftw's legacy emit keys
+(`w`, `soc`, `l1_v`, …) remain accepted indefinitely — but new drivers
+should emit canonical keys only. Keys outside the known vocabulary
+pass through to Data and are debug-logged once per driver+key.
 
-For anything that doesn't fit the pv/battery/meter shape — temperatures,
-DC voltages, MPPT currents, grid frequency — use:
+For scalar diagnostics that don't fit the structured shape —
+temperatures, DC-link voltages, status codes, vendor counters — use:
 
 ```lua
 host.emit_metric("inverter_temp_c", 42.3, "°C")
@@ -223,105 +249,67 @@ TSDB where the UI charts them on demand. There's no allow-list — pick a
 stable name and keep using it. Emitting a metric also counts as a driver
 health success (a metric-only driver stays online).
 
-### 3.3 MQTT (granted only if the driver has `mqtt:` in its config)
-
-| Call | Purpose |
-|---|---|
-| `host.mqtt_subscribe(topic)` | Subscribe to one topic. Call from `driver_init`. |
-| `host.mqtt_publish(topic, payload)` | Publish a string payload. |
-| `host.mqtt_messages()` | Return the array of `{topic, payload}` received since the last call, then clear the buffer. |
-
-`mqtt_sub` and `mqtt_pub` exist as aliases (`lua.go:252, 268`). If the
-driver has no MQTT capability, these calls return an error string. See
-`drivers/ferroamp.lua:96-115` for a working init + poll loop.
-
-### 3.4 Modbus (granted only if the driver has `modbus:` in its config)
-
-| Call | Purpose |
-|---|---|
-| `host.modbus_read(addr, count, kind)` | `kind = "input" \| "holding" \| "coil" \| "discrete"`. Returns a 1-indexed Lua table of uint16s. |
-| `host.modbus_write(addr, value)` | Single holding-register write (FC 0x06). |
-| `host.modbus_write_multi(addr, values)` | Multi-register write (FC 0x10). `values` is a Lua array of uint16s. |
-
-Always wrap reads in `pcall` — a single failed register read should not
-crash the whole poll cycle. See `drivers/sungrow.lua:127-129` for the
-pattern.
-
-### 3.5 Raw TCP (granted only if the driver has `capabilities.tcp:` in its config)
-
-| Call | Purpose |
-|---|---|
-| `host.tcp_open(addr)` | Open a long-lived TCP socket to `"host:port"`. Idempotent — doubles as the reconnect path. |
-| `host.tcp_recv()` | Drain any bytes received since the last call (non-blocking, empty string when idle). |
-| `host.tcp_is_open()` | Boolean — false after EOF / read error. Re-open on the next poll. |
-| `host.tcp_close()` | Tear down the socket. |
-
-For passthrough Serial-to-Ethernet bridges (Dutch P1 smart-meter readers,
-some Modbus-RTU-to-TCP devices in raw mode) that stream unsolicited bytes
-on a fixed port. TCP is byte-stream — the driver does its own framing on
-the accumulated buffer. Read-only today: there's no `tcp_send`, because
-the supported targets don't expect input. See `drivers/zuidwijk_p1.lua`
-for a full DSMR 5 parser (frame detection + CRC16 + OBIS decode) built on
-this capability.
-
-### 3.6 Decoders
-
-Modbus returns raw uint16s. These helpers combine pairs back into the
-integer you actually want. Parameter order matters — `_le` takes
-`(lo, hi)`, `_be` takes `(hi, lo)`.
-
-| Call | Returns |
-|---|---|
-| `host.decode_u32_le(lo, hi)` | Unsigned 32-bit, little-endian word order (Sungrow's habit). |
-| `host.decode_u32_be(hi, lo)` | Unsigned 32-bit, big-endian. |
-| `host.decode_i32_le(lo, hi)` | Signed 32-bit, little-endian. |
-| `host.decode_i32_be(hi, lo)` | Signed 32-bit, big-endian. |
-| `host.decode_i16(reg)` | Sign-extend a single uint16 to int16. |
-
-### 3.7 JSON
-
-| Call | Purpose |
-|---|---|
-| `host.json_decode(str)` | Returns a Lua table on success, `nil, err_msg` on failure. |
-| `host.json_encode(tbl)` | Returns a JSON string. |
-
 ## 4. Sign convention
 
-This is the single most important rule in driver-land. Emit every value
-in **site convention**; the EMS, battery models, controller, UI, and
-API all assume it.
+The single most important rule in driver-land. Sourceful's axis
+matches ftw's site convention at the driver boundary — emit device
+values on it and **never flip signs above the driver**:
 
 | Channel | Positive | Negative |
 |---|---|---|
-| `meter.w` | importing from grid | exporting to grid |
-| `pv.w`   | (never — always ≤ 0) | generating |
-| `battery.w` | charging (energy INTO battery) | discharging (energy OUT of battery) |
+| `meter.ac_W` | importing from grid | exporting to grid |
+| `pv.dc_W` | (never — always ≤ 0) | generating |
+| `battery.dc_W` | charging (energy INTO battery) | discharging |
 | `ev.w` | vehicle charging | (never) |
-| `v2x_charger.w` | vehicle charging | vehicle discharging into site/grid |
 
-Drivers convert at the boundary. If your device reports PV as a positive
-number (almost all do), negate it before `host.emit`. If your device
-encodes battery direction in a status register (Sungrow does —
-`drivers/sungrow.lua:127-130, 207-209`), decode direction first, then
-apply sign, then emit.
+Drivers convert at the boundary. If your device reports PV as a
+positive number (almost all do), negate it before `host.emit`. If it
+encodes battery direction in a status register (Sungrow does), decode
+direction first, then apply sign, then emit. Full rationale in
+[`docs/site-convention.md`](site-convention.md).
 
-Above the driver layer, everything is in site convention. Full rationale
-in `docs/site-convention.md`.
+## 5. The host API in one breath
 
-## 5. Step-by-step: adding a new device
+Blixt-core surface (a registry driver runs unmodified on both hosts):
+`set_make/set_model/set_sn/set_rated_w/set_warmup_s`,
+`modbus_read(addr, count, kind?)` (kind defaults `"holding"`),
+`write`/`write_registers` (+ ftw names `modbus_write`/`modbus_write_multi`),
+`decode_i16/u16/u32_le/u32_be/i32_le/i32_be/f32_be/string`,
+`log(msg)` or `log(level, msg)`, `sleep`, `millis`, `now_ms`,
+`emit(event, tbl)`.
 
-1. Copy `drivers/sungrow.lua` (Modbus) or `drivers/ferroamp.lua` (MQTT)
-   to `drivers/my-device.lua`.
-2. Update the `DRIVER` metadata table: `id`, `name`, `manufacturer`,
-   `version`, `protocols`, `capabilities`, `description`, `homepage`,
-   `authors`, `tested_models`.
-3. Replace the protocol code (Modbus register reads or MQTT topic subs)
-   with your device's spec. Convert signs at the boundary.
-4. Test in isolation:
+ftw superset (use freely in ftw-only drivers; avoid in drivers meant
+for the shared registry): `set_poll_interval`,
+`set_watchdog_timeout_s`, `emit_metric`, `json_encode/json_decode`,
+`persist_secret(key, value)` (durably store a provider-rotated secret
+— e.g. an OAuth `refresh_token` — in the unwatched state KV; layered
+back over `config.<key>` at next `driver_init`; operator-entered
+credentials stay in `config.<key>` with `secret = true` in the
+manifest, never write those back), MQTT
+(`mqtt_subscribe/mqtt_publish/mqtt_messages`), HTTP
+(`http_get/http_post`, allowlisted hosts), WebSocket
+(`ws_open/ws_send/ws_messages/ws_is_open/ws_close`), raw TCP
+(`tcp_open/tcp_recv/tcp_is_open/tcp_close`).
+
+Capabilities are granted per driver in `config.yaml` — calling an
+ungranted capability returns an error string. Always wrap Modbus reads
+in `pcall`; one failed register must not kill the poll.
+
+Full signatures: [`docs/host-api.md`](host-api.md).
+
+## 6. Step-by-step: adding a new device
+
+1. Copy `drivers/skeleton.lua` to `drivers/my-device.lua`.
+2. Fill in `DRIVER_MANIFEST`: name/version/role, catalog metadata, a
+   `requires`/`options` entry for **every** config key you read, and
+   the `provides` contract.
+3. Replace the placeholder bodies with your device's protocol code.
+   Convert signs at the boundary; emit canonical keys.
+4. Sanity-check manifest + lifecycle against the unit harness:
 
    ```bash
-   cd /Users/fredde/repositories/forty-two-watts/go
-   go test -count=1 -run TestLuaDriverLifecycle ./internal/drivers/
+   cd go
+   go test -count=1 -run 'TestAudit|TestLuaDriverLifecycle' ./internal/drivers/
    ```
 
 5. Wire the driver into `config.yaml`:
@@ -329,97 +317,88 @@ in `docs/site-convention.md`.
    ```yaml
    drivers:
      - name: my-device
-       lua: drivers/my-device.lua
-       is_site_meter: false
+       lua: drivers/my-device.lua          # or driver: name@version (registry)
        battery_capacity_wh: 10000
+       # telemetry_only: true              # run read-only; control fields not required
+       config:                             # validated against the manifest
+         battery_capacity_wh: 10000
        capabilities:
-         modbus:
-           host: 192.168.1.50
-           port: 502
-           unit_id: 1
+         modbus: { host: 192.168.1.50, port: 502, unit_id: 1 }
    ```
 
-   For an MQTT driver, swap `capabilities.modbus` for
-   `capabilities.mqtt` with `host`, `port`, `username`, and `password`.
+6. Probe it without restarting — `POST /api/drivers/test` runs a real
+   one-shot init+poll against the device and returns what it emitted:
 
-6. Restart the service (or wait for `fsnotify` to hot-reload
-   `config.yaml`).
-7. Open Settings → Devices in the UI and confirm your driver appears
-   with the correct `device_id`.
+   ```bash
+   curl -s -X POST localhost:8080/api/drivers/test -d '{
+     "lua": "drivers/my-device.lua",
+     "capabilities": { "modbus": { "host": "192.168.1.50", "port": 502, "unit_id": 1 } },
+     "config": { "battery_capacity_wh": 10000 }
+   }' | jq
+   ```
 
-## 6. Common pitfalls
+   (The Settings → Devices "Test connection" button uses the same
+   endpoint.)
 
-- **Forgetting the sign flip.** PV inverters report generation as
-  positive; the EMS expects negative. Quick check:
-  `curl localhost:8080/api/status` — `pv_w` should be negative when the
-  sun is up.
-- **Blocking `driver_poll`.** The runtime calls poll on a single
-  goroutine per driver. Never sleep or block on long IO. Read, emit,
-  return the next-poll-ms.
-- **Updating config without a restart.** `fsnotify` catches writes to
-  `config.yaml`, but a syntax error means the reload silently fails —
-  check the service log after editing.
-- **Ignoring `driver_default_mode`.** If you don't revert to autonomous
-  in this function, your device will get stuck in the last-commanded
-  forced mode if the EMS crashes. Always revert.
-- **Emitting telemetry too often.** Poll cadence ≈ 1 Hz is plenty.
-  Faster doesn't help control quality and saturates Modbus. The EMS
-  control loop runs at `control_interval_s` (default 2 s) — your
-  driver doesn't need to outrun it.
-- **Using `soc` as a percent.** The EMS expects `soc` as a 0.0–1.0
+7. Restart the service (or let `fsnotify` hot-reload the config), then
+   confirm in Settings → Devices that the driver appears with the
+   correct `device_id` and that `curl localhost:8080/api/status` shows
+   sane, correctly-signed numbers.
+
+## 7. Common pitfalls
+
+- **Forgetting the sign flip.** `pv_w` must be negative when the sun
+  is up — the host rejects positive PV emits outright.
+- **Undeclared config keys.** Every `config.<key>` your body reads must
+  be in `requires`/`options` — `TestAuditEveryConfigReadIsDeclared`
+  fails CI otherwise, because undeclared keys can never be set from
+  the UI form.
+- **Percent SoC.** `SoC_nom_fract` (and legacy `soc`) is a 0..1
   fraction. If the device reports 0–100, divide.
+- **Blocking `driver_poll`.** Poll runs on a single goroutine per
+  driver. Read, emit, return the next-poll-ms.
+- **Re-emitting stale cache.** For push transports (MQTT/WS), track
+  per-topic arrival timestamps and stop emitting when the cache ages
+  out — otherwise `host.emit` keeps advancing LastSuccess and the
+  watchdog can never flip a dead device offline (see the 2026-05-02
+  incident notes in `drivers/ferroamp.lua`).
+- **Ignoring `driver_default_mode`.** Without a safe revert your device
+  stays in the last forced mode if the EMS crashes. Always revert to
+  autonomous self-consumption.
+- **Bus writes in `driver_init`.** Identification only. Control arming
+  belongs in `driver_command("init", 0)` so `telemetry_only` drivers
+  never touch a control register.
+- **Emitting too often.** ≈1 Hz is plenty; the control loop runs at
+  `control_interval_s` (default 2 s).
 
-## 7. Testing your driver
+## 8. Testing your driver
 
-Lua syntax + ABI check:
+Unit harness (real LuaDriver against fake capabilities — see
+`sungrow_driver_test.go`, `tibber_test.go`, `pixii_driver_test.go` for
+patterns worth copying):
 
 ```bash
-cd /Users/fredde/repositories/forty-two-watts/go
-go test -count=1 -run TestLuaDriverLifecycle ./internal/drivers/
+cd go
+go test -count=1 ./internal/drivers/
 ```
-
-The harness in `lua_test.go` spins up a real `LuaDriver`, calls `Init`,
-`Poll`, and `Command` three times, and asserts that telemetry and
-identity flow correctly. If you want to add assertions for your new
-driver, follow that pattern.
 
 Live with the simulators:
 
 ```bash
-make run-sim   # starts sim-ferroamp + sim-sungrow
-# In another terminal:
-make dev       # starts main app
+make dev       # sims + main app
 ```
 
-After deploying to a real device:
+Against real hardware: `POST /api/drivers/test` (§6), then
+`curl localhost:8080/api/status` and the TSDB series browser for your
+`emit_metric` diagnostics. See also
+[`docs/testing-drivers-live.md`](testing-drivers-live.md).
 
-```bash
-curl localhost:8080/api/status
-curl localhost:8080/api/drivers/catalog
-curl localhost:8080/api/series/catalog
-```
+## 9. Catalog + registry
 
-## 8. Driver catalog
+`GET /api/drivers/catalog` returns every parsed manifest (bundled +
+user dir); Settings → Devices renders the "Add device" picker and the
+per-driver config form directly from it. A human-readable snapshot
+lives in [`docs/driver-catalog.md`](driver-catalog.md).
 
-For the current list of shipped drivers (manufacturer, protocol,
-capabilities, control support, tested models), see
-[`docs/driver-catalog.md`](driver-catalog.md).
-
-The `DRIVER` metadata table is parsed by
-`go/internal/drivers/catalog.go:LoadCatalog` with a regex — no Lua VM
-is spun up. The `GET /api/drivers/catalog` endpoint returns the parsed
-entries. Settings → Devices uses this for the "Add from catalog"
-dropdown.
-
-If the regex can't extract your metadata, the driver still runs but
-won't appear in the catalog. Keep the block plain:
-
-```lua
-DRIVER = {
-  id   = "value",
-  list = { "a", "b" },
-}
-```
-
-No function calls, no concatenation, no variables — the catalog loader
-reads the source as text.
+Drivers can also be fetched from the Sourceful registry pinned as
+`driver: name@version` — see [`docs/driver-registry.md`](driver-registry.md).

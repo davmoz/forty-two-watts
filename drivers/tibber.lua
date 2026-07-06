@@ -25,38 +25,35 @@
 -- Sign convention:
 --   Tibber `power` = consumption W (≥0 when importing).
 --   Tibber `powerProduction` = production W (≥0 when exporting).
---   Site convention `meter.w` = positive on import, so we publish
+--   Site convention `meter.ac_W` = positive on import, so we publish
 --   `power - powerProduction` (giving negative numbers on export).
 
-DRIVER = {
-  id           = "tibber",
-  name         = "Tibber Pulse",
-  manufacturer = "Tibber",
+DRIVER_MANIFEST = {
+  name         = "tibber",
   version      = "1.0.0",
+  role         = "meter",
+  display_name = "Tibber Pulse",
+  manufacturer = "Tibber",
   protocols    = { "websocket", "http" },
-  capabilities = { "meter" },
-  description  = "Tibber Pulse grid meter via GraphQL-transport-ws liveMeasurement stream.",
-  homepage     = "https://tibber.com",
-  authors      = { "forty-two-watts contributors" },
   tested_models = { "Pulse IR", "Pulse HAN", "Pulse P1" },
-  verification_status = "experimental",
-  -- Settings UI: the api_key field gets rendered as a password input in the
-  -- per-driver "secrets" slot. home_id is left out of config_secrets because
-  -- it's optional and auto-resolved from /viewer/homes on first poll.
-  config_secrets = { "api_key" },
-  config_schema = {
-    api_key = {
-      label = "Tibber API key",
-      type  = "string",
-      secret = true,
-      required = true,
-      help = "Personal access token from https://developer.tibber.com/settings/access-token. Needs at least read access to home + liveMeasurement.",
-    },
-    home_id = {
-      label = "Home ID (optional)",
-      type  = "string",
-      help  = "UUID of the home to subscribe to. Auto-resolved from /viewer/homes if omitted.",
-    },
+  verification = {
+    status = "experimental",
+  },
+  poll_interval_ms = 2000,
+  requires = {
+    { name = "api_key", purpose = "always", type = "string", secret = true,
+      help = "Personal access token from https://developer.tibber.com/settings/access-token. Needs at least read access to home + liveMeasurement." },
+  },
+  options = {
+    { name = "home_id", purpose = "always", type = "string",
+      help = "UUID of the home to subscribe to. Auto-resolved when the account has exactly one home; REQUIRED on multi-home accounts (the driver refuses to guess)." },
+  },
+  provides = {
+    live   = { "meter.ac_W",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.total_import_Wh", "meter.total_export_Wh" },
+    static = { "make", "sn" },
   },
 }
 
@@ -211,31 +208,31 @@ local function emit_live(lm)
   local p_import = tonumber(lm.power) or 0
   local p_export = tonumber(lm.powerProduction) or 0
   local meter = {
-    w = p_import - p_export,
+    ac_W = p_import - p_export,
   }
-  if lm.voltagePhase1 then meter.l1_v = tonumber(lm.voltagePhase1) end
-  if lm.voltagePhase2 then meter.l2_v = tonumber(lm.voltagePhase2) end
-  if lm.voltagePhase3 then meter.l3_v = tonumber(lm.voltagePhase3) end
-  if lm.currentL1     then meter.l1_a = tonumber(lm.currentL1)     end
-  if lm.currentL2     then meter.l2_a = tonumber(lm.currentL2)     end
-  if lm.currentL3     then meter.l3_a = tonumber(lm.currentL3)     end
+  if lm.voltagePhase1 then meter.L1_V = tonumber(lm.voltagePhase1) end
+  if lm.voltagePhase2 then meter.L2_V = tonumber(lm.voltagePhase2) end
+  if lm.voltagePhase3 then meter.L3_V = tonumber(lm.voltagePhase3) end
+  if lm.currentL1     then meter.L1_A = tonumber(lm.currentL1)     end
+  if lm.currentL2     then meter.L2_A = tonumber(lm.currentL2)     end
+  if lm.currentL3     then meter.L3_A = tonumber(lm.currentL3)     end
   -- Tibber publishes accumulatedConsumption / Production in kWh; the
   -- meter contract expects Wh.
   if lm.accumulatedConsumption then
-    meter.import_wh = tonumber(lm.accumulatedConsumption) * 1000
+    meter.total_import_Wh = tonumber(lm.accumulatedConsumption) * 1000
   end
   if lm.accumulatedProduction then
-    meter.export_wh = tonumber(lm.accumulatedProduction) * 1000
+    meter.total_export_Wh = tonumber(lm.accumulatedProduction) * 1000
   end
   host.emit("meter", meter)
 
   -- Diagnostics: per-phase voltage/current + Pulse radio link.
-  if meter.l1_v then host.emit_metric("meter_l1_v", meter.l1_v) end
-  if meter.l2_v then host.emit_metric("meter_l2_v", meter.l2_v) end
-  if meter.l3_v then host.emit_metric("meter_l3_v", meter.l3_v) end
-  if meter.l1_a then host.emit_metric("meter_l1_a", meter.l1_a) end
-  if meter.l2_a then host.emit_metric("meter_l2_a", meter.l2_a) end
-  if meter.l3_a then host.emit_metric("meter_l3_a", meter.l3_a) end
+  if meter.L1_V then host.emit_metric("meter_l1_v", meter.L1_V) end
+  if meter.L2_V then host.emit_metric("meter_l2_v", meter.L2_V) end
+  if meter.L3_V then host.emit_metric("meter_l3_v", meter.L3_V) end
+  if meter.L1_A then host.emit_metric("meter_l1_a", meter.L1_A) end
+  if meter.L2_A then host.emit_metric("meter_l2_a", meter.L2_A) end
+  if meter.L3_A then host.emit_metric("meter_l3_a", meter.L3_A) end
   if lm.signalStrength then
     host.emit_metric("tibber_signal_dbm", tonumber(lm.signalStrength) or 0)
   end

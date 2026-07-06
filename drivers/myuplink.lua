@@ -38,20 +38,39 @@
 -- defaults below don't match your model. Each can be overridden in config
 -- (param_power_id, param_hw_temp_id, param_indoor_temp_id, param_outdoor_temp_id).
 
-DRIVER = {
-  id           = "myuplink",
-  name         = "MyUplink Heat Pump (telemetry)",
-  manufacturer = "MyUplink (NIBE, Bosch, Atlantic, Daikin, ...)",
+DRIVER_MANIFEST = {
+  name         = "myuplink",
   version      = "1.0.0",
+  role         = "heat-pump",
+  display_name = "MyUplink Heat Pump (telemetry)",
+  manufacturer = "MyUplink (NIBE, Bosch, Atlantic, Daikin, ...)",
   protocols    = { "http" },
-  capabilities = { "apicreds" },
-  description  = "Read-only heat-pump telemetry via MyUplink Cloud REST API v2: compressor power + hot-water/indoor/outdoor temperatures. Observe-only — no control. OAuth: authorization-code + refresh-token (connect in Settings → Devices).",
-  homepage     = "https://dev.myuplink.com",
-  http_hosts   = { "api.myuplink.com" },
-  authors      = { "hannesb90", "forty-two-watts contributors" },
+  connection_defaults = {},
   tested_models = { "NIBE F1145", "NIBE S1255", "NIBE F730" },
-  verification_status = "experimental",
-  config_secrets = { "client_secret", "refresh_token" },
+  verification = { status = "experimental" },
+  requires = {
+    { name = "client_id", purpose = "always", type = "string",
+      help = "\"Client Identifier\" from your MyUplink developer-portal app (a UUID). NOT the secret." },
+    { name = "client_secret", purpose = "always", type = "string", secret = true,
+      help = "\"Client Secret\" from your MyUplink developer-portal app. Stored masked." },
+  },
+  options = {
+    -- refresh_token is intentionally NOT declared: the OAuth connect flow
+    -- writes it (and host.persist_secret rotates it) — never hand-entered.
+    { name = "device_id", purpose = "always", type = "string",
+      help = "MyUplink device id. Auto-detected from the account when omitted." },
+    { name = "param_power_id", purpose = "always", type = "string", default = "10012",
+      help = "Parameter id for compressor power (W). NIBE default 10012; find yours via GET /v2/devices/{id}/points." },
+    { name = "param_hw_temp_id", purpose = "always", type = "string", default = "40013",
+      help = "Parameter id for hot-water top temperature. NIBE BT6 default 40013." },
+    { name = "param_indoor_temp_id", purpose = "always", type = "string", default = "40033",
+      help = "Parameter id for room temperature. NIBE BT50 default 40033." },
+    { name = "param_outdoor_temp_id", purpose = "always", type = "string", default = "40004",
+      help = "Parameter id for outdoor temperature. NIBE BT1 default 40004." },
+  },
+  provides = {
+    static = { "make" },
+  },
 }
 
 PROTOCOL = "http"

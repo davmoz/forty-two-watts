@@ -14,11 +14,16 @@ convention. Read `docs/site-convention.md` before touching any power-math
 code.
 
 **Lua drivers**: `drivers/*.lua` loaded by `gopher-lua` are the only
-driver path. Each driver file implements the lifecycle (`driver_init`,
-`driver_poll`, `driver_command`, `driver_default_mode`,
-`driver_cleanup`) and talks to hardware through the `host.*` capabilities
-exposed by `go/internal/drivers/lua.go`. Drivers are hot-editable on the
-Pi and need no build step.
+driver path. Each driver declares a `DRIVER_MANIFEST` table (blixt
+driver standard — typed config requirements validated before
+`driver_init`, catalog metadata; see `docs/driver-manifest.md`) and
+implements the lifecycle (`driver_init`, `driver_poll`,
+`driver_command`, `driver_default_mode`, `driver_cleanup`), talking to
+hardware through the `host.*` capabilities exposed by
+`go/internal/drivers/lua.go`. Control-capable drivers additionally get
+`driver_command("init", 0)` after init and `("deinit", 0)` on clean
+stop; `telemetry_only: true` in config runs a driver read-only.
+Drivers are hot-editable on the Pi and need no build step.
 
 **Clamping discipline**: every clamp must protect against a *quantifiable
 risk*. Read `docs/clamping.md` for the seven current clamps and the
@@ -151,8 +156,10 @@ builds tarballs locally but doesn't tag or publish.
 
 ## Adding a new driver
 
-1. Copy `drivers/ferroamp.lua` as a template to `drivers/mydevice.lua`.
-2. Implement `driver_init`, `driver_poll`, `driver_command`, and
+1. Copy `drivers/skeleton.lua` as a template to `drivers/mydevice.lua`.
+2. Fill in `DRIVER_MANIFEST` (name/version/role + requires/options for
+   every config key you read — `docs/driver-manifest.md`), then
+   implement `driver_init`, `driver_poll`, `driver_command`, and
    (optionally) `driver_default_mode` / `driver_cleanup`. Use the
    `host.*` helpers for I/O — full API in `go/internal/drivers/lua.go`.
 3. Call `host.set_make("…")` + `host.set_sn("…")` inside `driver_init`
@@ -173,16 +180,22 @@ Full walkthrough in `docs/writing-a-driver.md`.
 See the top-of-file comment in `go/internal/drivers/lua.go`. The `host`
 global exposes:
 
-- `host.log(level, msg)`, `host.millis()`, `host.set_poll_interval(ms)`
-- `host.set_make(s)`, `host.set_sn(s)` — anchors device identity
-- `host.emit("battery"|"pv"|"meter", {…})` — structured telemetry
+- `host.log(level, msg)` (or `host.log(msg)` → info), `host.millis()`,
+  `host.now_ms()`, `host.set_poll_interval(ms)`
+- `host.set_make(s)`, `host.set_sn(s)` — anchors device identity;
+  `host.set_model(s)`, `host.set_rated_w(w)`, `host.set_warmup_s(n)`
+- `host.emit("battery"|"pv"|"meter"|"inverter", {…})` — structured
+  telemetry; canonical blixt keys (dc_W/ac_W/SoC_nom_fract/mppts[])
+  accepted alongside legacy snake_case
 - `host.emit_metric(name, value [, unit])` — arbitrary scalar diagnostics into
   TS DB; optional display unit feeds UI grouping/labels + counts as a health tick
 - `host.persist_secret(key, value)` — durably store a rotated secret (e.g. an
   OAuth refresh_token) in the unwatched state KV; layered back over
   `config.<key>` at next init via the registry's `SecretOverride`
 - `host.mqtt_sub/pub/messages`, `host.modbus_read/write/write_multi`
-- `host.decode_u32_le/be`, `host.decode_i32_le/be`, `host.decode_i16`
+  (+ blixt aliases `host.write`, `host.write_registers`)
+- `host.decode_u32_le/be`, `host.decode_i32_le/be`, `host.decode_i16`,
+  `host.decode_u16`, `host.decode_f32_be`, `host.decode_string`
 - `host.json_encode/decode`
 
 MQTT / Modbus / HTTP calls return an error string if the driver wasn't
@@ -281,6 +294,7 @@ light theme can flip it cleanly.
 - `docs/site-convention.md` — sign convention (must-read)
 - `docs/architecture.md` — system overview, layers, data flow (NEW)
 - `docs/writing-a-driver.md` — Lua driver tutorial (NEW)
+- `docs/driver-manifest.md` — DRIVER_MANIFEST contract, lifecycle verbs, canonical emit keys
 - `docs/tsdb.md` — long-format TS schema + Parquet rolloff (NEW)
 - `docs/device-identity.md` — `device_id` resolution + ARP (NEW)
 - `docs/safety.md` — watchdog, clamps, fuse guard, stale-meter guard (NEW)

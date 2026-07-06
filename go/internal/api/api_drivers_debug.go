@@ -47,10 +47,20 @@ type readingDTO struct {
 }
 
 type driverIdentityDTO struct {
-	Make     string `json:"make,omitempty"`
-	SN       string `json:"sn,omitempty"`
-	MAC      string `json:"mac,omitempty"`
-	Endpoint string `json:"endpoint,omitempty"`
+	Make     string  `json:"make,omitempty"`
+	Model    string  `json:"model,omitempty"`
+	SN       string  `json:"sn,omitempty"`
+	MAC      string  `json:"mac,omitempty"`
+	Endpoint string  `json:"endpoint,omitempty"`
+	RatedW   float64 `json:"rated_w,omitempty"`
+}
+
+func identityDTOFromEnv(env *drivers.HostEnv) driverIdentityDTO {
+	id := env.IdentityInfo()
+	return driverIdentityDTO{
+		Make: id.Make, Model: id.Model, SN: id.SN,
+		MAC: id.MAC, Endpoint: id.Endpoint, RatedW: id.RatedW,
+	}
 }
 
 type driverProbeResp struct {
@@ -98,8 +108,7 @@ func (s *Server) handleDriverDetail(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(resp.Metrics, func(i, j int) bool { return resp.Metrics[i].Name < resp.Metrics[j].Name })
 	if s.deps.Registry != nil {
 		if env := s.deps.Registry.Env(name); env != nil {
-			make, sn, mac, ep := env.FullIdentity()
-			resp.Identity = driverIdentityDTO{Make: make, SN: sn, MAC: mac, Endpoint: ep}
+			resp.Identity = identityDTOFromEnv(env)
 		}
 	}
 	writeJSON(w, 200, resp)
@@ -115,8 +124,8 @@ func (s *Server) handleDriverTest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "invalid driver config: " + err.Error()})
 		return
 	}
-	if strings.TrimSpace(cfg.Lua) == "" {
-		writeJSON(w, 400, map[string]string{"error": "missing driver lua path"})
+	if strings.TrimSpace(cfg.Lua) == "" && strings.TrimSpace(cfg.Driver) == "" {
+		writeJSON(w, 400, map[string]string{"error": "missing driver lua path or registry ref"})
 		return
 	}
 
@@ -165,7 +174,11 @@ func (s *Server) handleDriverTest(w http.ResponseWriter, r *http.Request) {
 
 	displayName := strings.TrimSpace(cfg.Name)
 	if displayName == "" {
-		displayName = filepath.Base(cfg.Lua)
+		if cfg.Driver != "" {
+			displayName = cfg.Driver
+		} else {
+			displayName = filepath.Base(cfg.Lua)
+		}
 	}
 	testName := "__test_" + safeProbeName(displayName) + "_" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	cfg.Name = testName
@@ -180,9 +193,17 @@ func (s *Server) handleDriverTest(w http.ResponseWriter, r *http.Request) {
 	reg.MQTTFactory = s.deps.DriverMQTTFactory
 	reg.ModbusFactory = s.deps.DriverModbusFactory
 	reg.ARPLookup = s.deps.DriverARPLookup
-
 	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 	defer cancel()
+	// Probes of registry-ref drivers resolve through the same cache-
+	// first client as the runtime registry (nil = refs refused with a
+	// clear error from Registry.Add). The closure runs inside
+	// reg.Add(ctx, …) below, so it shares the probe's 12 s budget.
+	if s.deps.DriverRegistry != nil {
+		reg.ResolveDriverRef = func(ref string) (string, error) {
+			return s.deps.DriverRegistry.Resolve(ctx, ref)
+		}
+	}
 	started := time.Now()
 	if err := reg.Add(ctx, cfg); err != nil {
 		writeJSON(w, 200, driverProbeResp{
@@ -246,8 +267,7 @@ func collectDriverProbe(displayName, runtimeName string, tel *telemetry.Store, r
 	resp.Metrics = tel.LatestMetricsByDriver(runtimeName)
 	sort.Slice(resp.Metrics, func(i, j int) bool { return resp.Metrics[i].Name < resp.Metrics[j].Name })
 	if env := reg.Env(runtimeName); env != nil {
-		make, sn, mac, ep := env.FullIdentity()
-		resp.Identity = driverIdentityDTO{Make: make, SN: sn, MAC: mac, Endpoint: ep}
+		resp.Identity = identityDTOFromEnv(env)
 	}
 	return resp
 }

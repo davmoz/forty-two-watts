@@ -6,18 +6,32 @@
 --   v2x_charger.w > 0 = vehicle charging
 --   v2x_charger.w < 0 = vehicle discharging into the site/grid
 
-DRIVER = {
-  id           = "ambibox-v2x",
-  name         = "Ambibox V2X",
-  manufacturer = "Ambibox",
+DRIVER_MANIFEST = {
+  name         = "ambibox-v2x",
   version      = "1.0.0",
+  role         = "ev",
+  display_name = "Ambibox V2X",
+  manufacturer = "Ambibox",
   protocols    = { "mqtt" },
-  capabilities = { "v2x_charger" },
-  description  = "Ambibox bidirectional V2X charger via MQTT.",
-  verification_status = "experimental",
   connection_defaults = {
     host = "sid-os.local",
     port = 1883,
+  },
+  verification = { status = "experimental" },
+  requires = {},
+  options = {
+    { name = "serial", purpose = "always", type = "string",
+      help = "Charger serial number. Anchors device identity (make:serial) since the charger doesn't report one over MQTT." },
+    { name = "rated_power_w", purpose = "always", type = "integer",
+      default = 22000, min = 1000, max = 50000,
+      help = "Charger nameplate power in W. Default 22 kW." },
+    { name = "telemetry_max_age_ms", purpose = "always", type = "integer",
+      default = 15000, min = 1000, max = 120000,
+      help = "Drop cached MQTT values older than this before emitting (ms)." },
+  },
+  provides = {
+    live   = { "v2x_charger.w" },
+    static = { "make" },
   },
 }
 

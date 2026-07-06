@@ -4,22 +4,34 @@
 -- Reference: Kostal SunSpec map. SunSpec is big-endian for u32 values.
 -- READ-ONLY: no battery / curtail control.
 
-DRIVER = {
-  id           = "kostal",
-  name         = "Kostal Plenticore",
-  manufacturer = "Kostal",
+DRIVER_MANIFEST = {
+  name         = "kostal",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "Kostal Plenticore",
+  manufacturer = "Kostal",
   protocols    = { "modbus" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "Kostal Plenticore Plus and Piko IQ via Modbus TCP (SunSpec plus Kostal custom map).",
-  homepage     = "https://www.kostal-solar-electric.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "Plenticore Plus", "Piko IQ" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
-    port    = 502,
-    unit_id = 1,
+    port    = 1502, -- Kostal's factory Modbus TCP port (not 502)
+    unit_id = 71,   -- Kostal's factory unit id
+  },
+  tested_models = { "Plenticore Plus", "Piko IQ" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  poll_interval_ms = 5000,
+  requires = {},
+  options  = {},
+  provides = {
+    live   = { "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh",
+               "pv.dc_W", "pv.mppts[]", "pv.total_generation_Wh",
+               "battery.dc_W", "battery.SoC_nom_fract" },
+    static = { "make", "sn" },
   },
 }
 

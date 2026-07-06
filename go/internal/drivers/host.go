@@ -105,13 +105,27 @@ type HostEnv struct {
 	// return it from driver_poll. We persist the last hint here.
 	PollIntervalMS int32
 	// Identity set by driver / capability layer.
-	// Make + SN are reported via host.set_make / host.set_sn.
+	// Make + SN are reported via host.set_make / host.set_sn and anchor
+	// device_id resolution; Model (host.set_model) is descriptive only.
 	// Endpoint is the protocol+host+port string set by the registry when
 	// it wires the capability (see WithEndpoint).
 	Make     string
+	Model    string
 	SN       string
 	MAC      string // resolved by ARP after first connection (best-effort)
 	Endpoint string // e.g. "modbus://192.168.1.1:502" or "mqtt://broker:1883"
+	// RatedW is the device's nameplate AC rating reported via
+	// host.set_rated_w (or picked up from an inverter emit's rated_W).
+	RatedW float64
+	// WarmupS is the post-init settle hold requested via
+	// host.set_warmup_s: the registry suppresses command dispatch (not
+	// polls) for this many seconds after the "init" command verb.
+	WarmupS int
+
+	// loggedEmitKeys tracks unknown emit keys already logged so the
+	// "unknown key" debug line fires once per driver+event+key, not per
+	// poll.
+	loggedEmitKeys map[string]struct{}
 
 	// PersistSecret, when non-nil, lets a driver durably write a config
 	// secret (e.g. a rotated OAuth refresh_token) back into its own
@@ -309,6 +323,45 @@ func (h *HostEnv) setMake(m string) {
 	h.mu.Unlock()
 }
 
+// setModel records the device model string. Descriptive metadata only —
+// device_id resolution stays anchored on make+serial.
+func (h *HostEnv) setModel(m string) {
+	h.mu.Lock()
+	h.Model = m
+	h.mu.Unlock()
+}
+
+// setRatedW records the device's nameplate AC rating.
+func (h *HostEnv) setRatedW(w float64) {
+	h.mu.Lock()
+	h.RatedW = w
+	h.mu.Unlock()
+}
+
+// setRatedWIfUnset lets the inverter emit adapter backfill rated_W
+// without clobbering an explicit host.set_rated_w call.
+func (h *HostEnv) setRatedWIfUnset(w float64) {
+	h.mu.Lock()
+	if h.RatedW == 0 {
+		h.RatedW = w
+	}
+	h.mu.Unlock()
+}
+
+// setWarmupS records the post-init command-dispatch hold.
+func (h *HostEnv) setWarmupS(s int) {
+	h.mu.Lock()
+	h.WarmupS = s
+	h.mu.Unlock()
+}
+
+// Warmup returns the driver's requested post-init settle hold.
+func (h *HostEnv) Warmup() time.Duration {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return time.Duration(h.WarmupS) * time.Second
+}
+
 // PollInterval returns the driver's current requested poll cadence.
 func (h *HostEnv) PollInterval() time.Duration {
 	h.mu.Lock()
@@ -327,11 +380,34 @@ func (h *HostEnv) Identity() (make, sn string) {
 }
 
 // FullIdentity returns every identity bit known to the host so callers
-// (the registry) can compute a stable device_id.
+// (the registry) can compute a stable device_id. Model / RatedW are
+// deliberately NOT part of this tuple — device_id resolution stays
+// anchored on make:serial > mac > endpoint.
 func (h *HostEnv) FullIdentity() (make, sn, mac, endpoint string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.Make, h.SN, h.MAC, h.Endpoint
+}
+
+// DriverIdentity is the full descriptive identity for API surfaces.
+type DriverIdentity struct {
+	Make     string
+	Model    string
+	SN       string
+	MAC      string
+	Endpoint string
+	RatedW   float64
+}
+
+// IdentityInfo returns identity plus descriptive metadata (model,
+// rated power) for /api/drivers/{name} style consumers.
+func (h *HostEnv) IdentityInfo() DriverIdentity {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return DriverIdentity{
+		Make: h.Make, Model: h.Model, SN: h.SN,
+		MAC: h.MAC, Endpoint: h.Endpoint, RatedW: h.RatedW,
+	}
 }
 
 // SetEndpoint records the protocol-specific connection string for this

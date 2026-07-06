@@ -4,22 +4,45 @@
 -- Protocol: Modbus TCP (holding registers throughout)
 -- Byte order: Little-Endian for multi-register U32 values
 
-DRIVER = {
-  id           = "deye",
-  name         = "Deye hybrid inverter",
-  manufacturer = "Deye",
+DRIVER_MANIFEST = {
+  name         = "deye",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "Deye hybrid inverter",
+  manufacturer = "Deye",
   protocols    = { "modbus" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "Deye SUN-SG series hybrid inverters via Modbus. Auto-detects LV vs HV battery at init.",
-  homepage     = "https://www.deyeinverter.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "SUN-SG03LP1", "SUN-SG04LP3" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "SUN-SG03LP1", "SUN-SG04LP3" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  poll_interval_ms = 5000,
+  requires = {},
+  options = {
+    { name = "rated_w", purpose = "control", type = "integer", min = 100, max = 200000,
+      help = "Inverter rated AC power in W. Caps setpoint/curtail writes. Read from the inverter (regs 20-21) when omitted; falls back to 5000 W." },
+    { name = "max_grid_charge_a", purpose = "control", type = "integer", default = 31, min = 0, max = 185,
+      help = "Grid-to-battery charge current cap in A (reg 128). Size to the main fuse / grid subscription, not the battery. Register ceiling 185 A per Deye V105.3." },
+    { name = "soc_max", purpose = "control", type = "integer", default = 100, min = 0, max = 100,
+      help = "Charge ceiling SoC in percent, written to the SoC-target register on charge commands." },
+    { name = "soc_min", purpose = "control", type = "integer", default = 20, min = 0, max = 100,
+      help = "Discharge floor SoC in percent, written to the SoC-target register on discharge commands." },
+  },
+  provides = {
+    live   = { "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh",
+               "pv.dc_W", "pv.mppts[]", "pv.total_generation_Wh",
+               "battery.dc_W", "battery.V", "battery.A",
+               "battery.SoC_nom_fract", "battery.temperature_C",
+               "battery.total_charge_Wh", "battery.total_discharge_Wh" },
+    static = { "make", "sn" },
   },
 }
 --
@@ -57,6 +80,12 @@ local rated_power_w = 0
 -- fuse / grid subscription, not the battery's max charge rate. Overridable
 -- via config.max_grid_charge_a; default 31 A matches Zap's init profile.
 local grid_charge_current_a = 31
+-- SoC targets written to reg 166. Charge commands aim for soc_max,
+-- discharge commands floor at soc_min. Defaults match Zap; overridable
+-- via config.soc_max / config.soc_min. Declared before driver_init so the
+-- config overrides land in these locals, not stray globals.
+local soc_max = 100
+local soc_min = 20
 
 ----------------------------------------------------------------------------
 -- Initialization
@@ -416,12 +445,6 @@ local REG_BATTERY_VOLTAGE    = 587
 
 local EMS_LOAD_FIRST  = 1  -- native self-consumption, battery tops up load
 local EMS_EXTERNAL    = 3  -- forced setpoints via reg 108/154
-
--- SoC targets written to reg 166. Charge commands aim for soc_max,
--- discharge commands floor at soc_min. Defaults match Zap; overridable
--- via config.soc_max / config.soc_min.
-local soc_max = 100
-local soc_min = 20
 
 local CHARGE_CURRENT_DEFAULT_A = 31  -- matches Zap init profile
 

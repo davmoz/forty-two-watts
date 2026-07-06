@@ -43,23 +43,40 @@
 --   of generation reports pv.W = -2745). So we pass both through
 --   unchanged — no boundary sign flip.
 
-DRIVER = {
-  id           = "sourceful-zap",
-  name         = "Sourceful Zap",
-  manufacturer = "Sourceful",
+DRIVER_MANIFEST = {
+  name         = "sourceful-zap",
   version      = "1.1.0",
+  role         = "meter",
+  display_name = "Sourceful Zap",
+  manufacturer = "Sourceful",
   protocols    = { "http" },
-  capabilities = { "meter", "pv" },
-  description  = "Sourceful Zap local-JSON gateway: P1 grid meter + PV from any attached inverter.",
-  homepage     = "https://sourceful.energy",
-  authors      = { "forty-two-watts contributors" },
-  http_hosts   = { "zap.local" },
-  verification_status = "beta",
-  verified_by = { "erikarenhill@fortytwo:3d" },
-  verified_at = "2026-04-17",
-  verification_notes = "P1 + PV aggregation verified against a live Sourceful Zap. Awaiting a second site to promote to production.",
   connection_defaults = {
     host = "zap.local",
+  },
+  verification = {
+    status      = "beta",
+    verified_by = { "erikarenhill@fortytwo:3d" },
+    verified_at = "2026-04-17",
+    notes       = "P1 + PV aggregation verified against a live Sourceful Zap. Awaiting a second site to promote to production.",
+  },
+  poll_interval_ms = 1000,
+  requires = {},
+  options = {
+    { name = "host", purpose = "always", type = "string", default = "zap.local",
+      help = "Zap hostname or IP. The mDNS default zap.local works on most LANs; pin the IP if mDNS is blocked." },
+    { name = "serial", purpose = "always", type = "string",
+      help = "P1 meter serial to read when several are attached. Auto-discovered from /api/devices when omitted." },
+    { name = "disable_pv", purpose = "always", type = "boolean", default = false,
+      help = "Skip PV aggregation from inverters attached to the Zap (use when PV comes from another driver)." },
+  },
+  provides = {
+    live   = { "meter.ac_W",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh",
+               "pv.dc_W", "pv.total_generation_Wh" },
+    static = { "make", "sn" },
   },
 }
 

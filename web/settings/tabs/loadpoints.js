@@ -14,16 +14,19 @@
     return fetch(path, opts);
   }
 
-  // Drivers eligible to back a loadpoint = ones the catalog tags with
-  // the "ev" capability. We resolve via the same catalogByLua map the
-  // Devices tab populates (loaded once per modal open).
+  // Drivers eligible to back a loadpoint = ones whose manifest promises
+  // live "ev.*" telemetry (provides.live). We resolve via the same
+  // catalogByLua map the Devices tab populates (loaded once per modal
+  // open). Vehicle-telemetry drivers (provides "vehicle.*") are NOT
+  // loadpoints — they report the car, not the wallbox.
   function evDrivers(config) {
     var out = [];
     var cat = S.catalogByLua || {};
+    var MF = window.FTWManifestForm;
     (config.drivers || []).forEach(function (d) {
       var entry = d.lua ? cat[d.lua] : null;
-      var caps = (entry && entry.capabilities) || [];
-      if (caps.indexOf("ev") >= 0) out.push(d.name || "");
+      if (!entry && d.driver) entry = (S.manifestByRef || {})[d.driver] || null;
+      if (entry && MF && MF.emits(entry, "ev")) out.push(d.name || "");
     });
     return out;
   }

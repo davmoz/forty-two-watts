@@ -77,23 +77,44 @@ func TestSolisStringEmitsPVOnlyInSiteConvention(t *testing.T) {
 	if err := json.Unmarshal(pv.Data, &data); err != nil {
 		t.Fatalf("pv data: %v", err)
 	}
+	// Canonical keys emitted by the driver.
+	if !near(data["dc_W"].(float64), -4200) {
+		t.Errorf("dc_W = %v, want -4200", data["dc_W"])
+	}
+	if !near(data["total_generation_Wh"].(float64), 12345000) {
+		t.Errorf("total_generation_Wh = %v, want 12345000", data["total_generation_Wh"])
+	}
+	// Legacy mirrors the adapter maintains for existing consumers.
 	if !near(data["mppt1_v"].(float64), 350.1) {
 		t.Errorf("mppt1_v = %v, want 350.1", data["mppt1_v"])
 	}
 	if !near(data["mppt1_a"].(float64), 8.2) {
 		t.Errorf("mppt1_a = %v, want 8.2", data["mppt1_a"])
 	}
-	if !near(data["dc_w"].(float64), 4400) {
-		t.Errorf("dc_w = %v, want 4400", data["dc_w"])
-	}
 	if !near(data["lifetime_wh"].(float64), 12345000) {
 		t.Errorf("lifetime_wh = %v, want 12345000", data["lifetime_wh"])
+	}
+	// ftw extras kept verbatim on the payload.
+	if !near(data["dc_w"].(float64), 4400) {
+		t.Errorf("dc_w = %v, want 4400", data["dc_w"])
 	}
 	if !near(data["temp_c"].(float64), 42.3) {
 		t.Errorf("temp_c = %v, want 42.3", data["temp_c"])
 	}
 	if !near(data["hz"].(float64), 50.01) {
 		t.Errorf("hz = %v, want 50.01", data["hz"])
+	}
+	// Per-tracker TS series come from the host's mppts[] fan-out under
+	// the same pv_mppt{n}_* names the driver used to emit manually.
+	samples := tel.FlushSamples()
+	found := false
+	for _, s := range samples {
+		if s.Driver == "solis-string" && s.Metric == "pv_mppt2_v" && near(s.Value, 356.2) {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected pv_mppt2_v=356.2 TS sample from mppts[] fan-out")
 	}
 }
 
@@ -108,18 +129,21 @@ func TestSolisStringCatalogEntry(t *testing.T) {
 	}
 	var found *CatalogEntry
 	for i, e := range entries {
-		if e.ID == "solis-string" {
+		if e.ID == "solis_string" {
 			found = &entries[i]
 			break
 		}
 	}
 	if found == nil {
-		t.Fatalf("solis-string not in catalog")
+		t.Fatalf("solis_string not in catalog")
+	}
+	if found.Name != "solis-string" {
+		t.Errorf("manifest name = %q, want solis-string", found.Name)
 	}
 	if found.Manufacturer != "Ginlong Solis" {
 		t.Errorf("manufacturer = %q, want Ginlong Solis", found.Manufacturer)
 	}
-	if len(found.Capabilities) != 1 || found.Capabilities[0] != "pv" {
-		t.Errorf("capabilities = %v, want [pv]", found.Capabilities)
+	if found.Role != "pv" {
+		t.Errorf("role = %q, want pv", found.Role)
 	}
 }

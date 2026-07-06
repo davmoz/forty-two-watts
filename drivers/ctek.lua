@@ -65,22 +65,38 @@
 --         max_a:     16         # fuse-limited max (A); default 16
 --         voltage_v: 230        # nominal per-phase voltage; default 230
 
-DRIVER = {
-  id           = "ctek-chargestorm",
-  name         = "CTEK Chargestorm (API v1)",
-  manufacturer = "CTEK",
+DRIVER_MANIFEST = {
+  name         = "ctek-chargestorm",
   version      = "0.2.0",
+  role         = "ev",
+  display_name = "CTEK Chargestorm (API v1)",
+  manufacturer = "CTEK",
   protocols    = { "modbus" },
-  capabilities = { "ev" },
-  description  = "CTEK Chargestorm Connected 2/3 via Modbus/TCP Automation API v1 (CSOS ≥ 4.9.3). Full telemetry + current-limit control.",
-  homepage     = "https://www.ctek.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "Chargestorm Connected 2", "Chargestorm Connected 3" },
-  verification_status = "beta",
-  verification_notes = "Register map per CTEK Automation interface v1.0; charging-limit write verified against CSOS 4.9.x. Derived charging/connected flags approximate the real EVSE state since the state code is MQTT-only.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "Chargestorm Connected 2", "Chargestorm Connected 3" },
+  verification = {
+    status = "beta",
+    notes  = "Register map per CTEK Automation interface v1.0; charging-limit write verified against CSOS 4.9.x. Derived charging/connected flags approximate the real EVSE state since the state code is MQTT-only.",
+  },
+  requires = {},
+  poll_interval_ms = 5000,
+  options = {
+    { name = "phases", purpose = "always", type = "integer", default = 3, min = 1, max = 3,
+      help = "Number of phases wired to the EVSE. Used to convert charge current to watts." },
+    { name = "voltage_v", purpose = "always", type = "double", default = 230, min = 100, max = 400,
+      help = "Per-phase mains voltage in V used for A/W conversion (230 in EU)." },
+    { name = "min_a", purpose = "control", type = "integer", default = 6, min = 6, max = 80,
+      help = "Minimum charging current in A. IEC 61851 floor is 6 A — below it most EVs pause the session." },
+    { name = "max_a", purpose = "control", type = "integer", default = 16, min = 6, max = 80,
+      help = "Maximum charging current in A. Match the breaker feeding the EVSE." },
+  },
+  provides = {
+    live   = { "ev.w", "ev.connected", "ev.charging", "ev.max_a",
+               "ev.phases", "ev.lifetime_wh" },
+    static = { "make", "sn" },
   },
 }
 

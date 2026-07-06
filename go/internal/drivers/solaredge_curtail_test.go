@@ -184,31 +184,32 @@ func TestSolarEdgeCurtailWithoutNominalRejected(t *testing.T) {
 	}
 }
 
-// All three SolarEdge driver variants advertise the new pv-curtail
-// capability now that legacy K-series is wired up too.
-func TestSolarEdgeCatalogAdvertisesCurtail(t *testing.T) {
+// All three SolarEdge driver variants declare the nominal_w control
+// option — the field the curtail path scales watt targets with. This is
+// the manifest-world equivalent of the old pv-curtail capability tag.
+func TestSolarEdgeCatalogDeclaresNominalW(t *testing.T) {
 	entries, err := LoadCatalog("../../../drivers")
 	if err != nil {
 		t.Fatalf("catalog: %v", err)
 	}
 	wantIDs := map[string]bool{
 		"solaredge":        false,
-		"solaredge-pv":     false,
-		"solaredge-legacy": false,
+		"solaredge_pv":     false,
+		"solaredge_legacy": false,
 	}
 	for _, e := range entries {
 		if _, ok := wantIDs[e.ID]; !ok {
 			continue
 		}
-		hasCurtail := false
-		for _, c := range e.Capabilities {
-			if c == "pv-curtail" {
-				hasCurtail = true
+		hasNominal := false
+		for _, f := range e.Options {
+			if f.Name == "nominal_w" && f.Purpose == "control" {
+				hasNominal = true
 				break
 			}
 		}
-		if !hasCurtail {
-			t.Errorf("driver %q missing pv-curtail capability: %v", e.ID, e.Capabilities)
+		if !hasNominal {
+			t.Errorf("driver %q missing nominal_w control option: %+v", e.ID, e.Options)
 		}
 		wantIDs[e.ID] = true
 	}

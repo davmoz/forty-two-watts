@@ -47,22 +47,41 @@
 --
 -- Solis firmware NACKs back-to-back holding writes; space them ~100 ms.
 
-DRIVER = {
-  id           = "solis",
-  name         = "Solis hybrid inverter",
-  manufacturer = "Ginlong Solis",
+DRIVER_MANIFEST = {
+  name         = "solis",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "Solis hybrid inverter",
+  manufacturer = "Ginlong Solis",
   protocols    = { "modbus" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "Solis S5/S6 hybrid inverters via Modbus TCP.",
-  homepage     = "https://www.ginlong.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "S6-EH", "S5-GR", "S6-GR" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "S6-EH", "S5-GR", "S6-GR" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  poll_interval_ms = 5000,
+  requires = {},
+  options = {
+    -- purpose="control": rated_w only bounds the charge/discharge limit
+    -- registers written on setpoint commands; telemetry needs nothing.
+    { name = "rated_w", purpose = "control", type = "integer", default = 5000, min = 100, max = 200000,
+      help = "Inverter rated AC power in W (datasheet). Caps the charge/discharge limit registers written with each setpoint." },
+  },
+  provides = {
+    live   = { "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh",
+               "pv.dc_W", "pv.mppts[]", "pv.total_generation_Wh",
+               "battery.dc_W", "battery.V", "battery.A",
+               "battery.SoC_nom_fract", "battery.temperature_C",
+               "battery.total_charge_Wh", "battery.total_discharge_Wh" },
+    static = { "make", "sn" },
   },
 }
 

@@ -19,22 +19,40 @@
 --         password: "secret"
 --         serial: "EHHZBKPF"    # optional — auto-detected if omitted
 
-DRIVER = {
-  id           = "easee-cloud",
-  name         = "Easee Cloud",
-  manufacturer = "Easee",
+DRIVER_MANIFEST = {
+  name         = "easee-cloud",
   version      = "1.0.0",
+  role         = "ev",
+  display_name = "Easee Cloud",
+  manufacturer = "Easee",
   protocols    = { "http" },
-  capabilities = { "ev" },
-  description  = "Easee Home/Charge via Cloud REST API. No local protocol needed.",
-  homepage     = "https://easee.com",
-  http_hosts   = { "api.easee.com" },
-  authors      = { "forty-two-watts contributors" },
   tested_models = { "Home", "Charge" },
-  verification_status = "production",
-  verified_by = { "frahlg@homelab-rpi:2d", "erikarenhill@fortytwo:1d" },
-  verified_at = "2026-04-18",
-  verification_notes = "Observations API + lifecycle commands exercised against an Easee Home charger. Session state, op_mode labels, charge/pause/resume all verified.",
+  verification = {
+    status      = "production",
+    verified_by = { "frahlg@homelab-rpi:2d", "erikarenhill@fortytwo:1d" },
+    verified_at = "2026-04-18",
+    notes       = "Observations API + lifecycle commands exercised against an Easee Home charger. Session state, op_mode labels, charge/pause/resume all verified.",
+  },
+  requires = {
+    { name = "email", purpose = "always", type = "string",
+      help = "Easee Cloud account e-mail." },
+    { name = "password", purpose = "always", type = "string", secret = true,
+      help = "Easee Cloud account password." },
+  },
+  poll_interval_ms = 5000,
+  options = {
+    { name = "serial", purpose = "always", type = "string",
+      help = "Charger serial (printed under the QR flap). Auto-detected when the account has exactly one charger." },
+    { name = "phases", purpose = "always", type = "integer", default = 3, min = 1, max = 3,
+      help = "Phases wired to the charger. Single-phase installs MUST set 1 or amperage is 3x under-requested (below Easee's 6 A floor the session silently halts)." },
+    { name = "max_charger_current", purpose = "control", type = "double", min = 6, max = 32,
+      help = "Clamp the charger's static maxChargerCurrent in A at init (Easee hardware ceiling 32 A). Bounds the post-phaseMode-reset window." },
+  },
+  provides = {
+    live   = { "ev.w", "ev.connected", "ev.charging", "ev.session_wh",
+               "ev.max_a", "ev.phases" },
+    static = { "make", "sn" },
+  },
 }
 
 PROTOCOL = "http"

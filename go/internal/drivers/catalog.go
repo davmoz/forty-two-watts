@@ -2,57 +2,26 @@ package drivers
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 )
 
 // CatalogEntry describes one available driver discovered in the drivers
-// directory. Populated from the DRIVER={…} table each .lua file declares
-// at the top. Missing fields are left empty.
+// directory: its parsed DRIVER_MANIFEST plus where the file lives. The
+// embedded Manifest is the single source of truth for driver metadata —
+// there is no separate regex-scraped DRIVER block anymore.
 type CatalogEntry struct {
-	Path               string         `json:"path"`          // portable config lua path
-	Filename           string         `json:"filename"`      // e.g. "ferroamp.lua"
-	ID                 string         `json:"id"`
-	Name               string         `json:"name"`
-	Manufacturer       string         `json:"manufacturer,omitempty"`
-	Version            string         `json:"version,omitempty"`
-	Protocols          []string       `json:"protocols,omitempty"`            // mqtt / modbus / http
-	Capabilities       []string       `json:"capabilities,omitempty"`         // meter / pv / battery
-	HTTPHosts          []string       `json:"http_hosts,omitempty"`
-	Description        string         `json:"description,omitempty"`
-	Homepage           string         `json:"homepage,omitempty"`
-	ConnectionDefaults map[string]any `json:"connection_defaults,omitempty"`
-
-	// Verification: who's actually run this driver against real
-	// hardware and how long. Populated from the DRIVER block's optional
-	// fields. The UI surfaces this as a badge next to each driver in
-	// the catalog picker so operators can distinguish "ported from
-	// reference, never proven against hardware" from "running for
-	// weeks at multiple sites".
-	VerificationStatus string   `json:"verification_status,omitempty"` // experimental | beta | production
-	VerifiedBy         []string `json:"verified_by,omitempty"`         // e.g. "frahlg@homelab-rpi:14d"
-	VerifiedAt         string   `json:"verified_at,omitempty"`         // ISO date of most recent entry
-	VerificationNotes  string   `json:"verification_notes,omitempty"`
-	TestedModels       []string `json:"tested_models,omitempty"` // e.g. ["Home", "Charge"]
-
-	// ConfigSecrets lists driver-specific config keys that the Settings
-	// UI / setup wizard should render as password inputs and store
-	// under config.<key>. Used for things like Auth-Tokens that the
-	// operator would otherwise have to drop into config.yaml by hand
-	// (e.g. the sonnen JSON-API v2 Auth-Token). The Lua side just
-	// reads `config.<key>` like any other entry — this is purely a
-	// hint for the UI layer.
-	ConfigSecrets []string `json:"config_secrets,omitempty"`
+	Path     string `json:"path"`     // portable config lua path, e.g. "drivers/ferroamp.lua"
+	Filename string `json:"filename"` // e.g. "ferroamp.lua"
+	ID       string `json:"id"`       // file stem, e.g. "ferroamp"
+	Manifest
 }
 
 // LoadCatalog scans dir (and any direct sub-directories) for .lua driver
-// files and extracts their DRIVER metadata table. Files without a DRIVER
-// block are still returned — just with ID/Name empty — so operators can
-// at least see they exist.
+// files and parses their DRIVER_MANIFEST tables.
 func LoadCatalog(dir string) ([]CatalogEntry, error) {
 	return LoadCatalogMulti(dir)
 }
@@ -64,7 +33,9 @@ func LoadCatalog(dir string) ([]CatalogEntry, error) {
 // first to shadow bundled drivers of the same name.
 //
 // Directories that don't exist or can't be read are silently skipped so
-// callers don't need to guard against an empty user-drivers dir.
+// callers don't need to guard against an empty user-drivers dir. Files
+// whose manifest fails to parse are skipped with a warning — one broken
+// driver must not blank the whole catalog.
 func LoadCatalogMulti(dirs ...string) ([]CatalogEntry, error) {
 	seen := make(map[string]struct{}) // keyed by Filename (e.g. "ferroamp.lua")
 	var out []CatalogEntry
@@ -90,13 +61,19 @@ func LoadCatalogMulti(dirs ...string) ([]CatalogEntry, error) {
 			if _, exists := seen[filename]; exists {
 				return nil // earlier dir already claimed this name
 			}
-			entry, err := parseCatalogEntry(path)
+			m, err := LoadManifest(path)
 			if err != nil {
-				return nil // skip malformed
+				slog.Warn("driver manifest unreadable, skipping from catalog", "path", path, "err", err)
+				return nil
 			}
+			normalizeCatalogVerification(m)
 			rel, _ := filepath.Rel(dir, path)
-			entry.Path = filepath.ToSlash(filepath.Join("drivers", rel))
-			entry.Filename = filename
+			entry := CatalogEntry{
+				Path:     filepath.ToSlash(filepath.Join("drivers", rel)),
+				Filename: filename,
+				ID:       strings.TrimSuffix(filename, ".lua"),
+				Manifest: *m,
+			}
 			seen[filename] = struct{}{}
 			out = append(out, entry)
 			return nil
@@ -106,9 +83,9 @@ func LoadCatalogMulti(dirs ...string) ([]CatalogEntry, error) {
 		}
 	}
 
-	// Stable sort by name (then filename as tiebreaker).
+	// Stable sort by display name (then filename as tiebreaker).
 	sort.Slice(out, func(i, j int) bool {
-		a, b := out[i].Name, out[j].Name
+		a, b := out[i].catalogSortName(), out[j].catalogSortName()
 		if a == b {
 			return out[i].Filename < out[j].Filename
 		}
@@ -123,117 +100,32 @@ func LoadCatalogMulti(dirs ...string) ([]CatalogEntry, error) {
 	return out, nil
 }
 
-// parseCatalogEntry opens the .lua file, finds the DRIVER = {…} block,
-// and extracts string/list fields via regex. Lightweight — no Lua VM.
-func parseCatalogEntry(path string) (CatalogEntry, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return CatalogEntry{}, err
+func (e CatalogEntry) catalogSortName() string {
+	if e.DisplayName != "" {
+		return e.DisplayName
 	}
-	s := string(data)
-	block := extractDriverBlock(s)
-	e := CatalogEntry{}
-	e.ID = pickString(block, "id")
-	e.Name = pickString(block, "name")
-	e.Manufacturer = pickString(block, "manufacturer")
-	e.Version = pickString(block, "version")
-	e.Description = pickString(block, "description")
-	e.Homepage = pickString(block, "homepage")
-	e.Protocols = pickList(block, "protocols")
-	e.Capabilities = pickList(block, "capabilities")
-	e.HTTPHosts = pickList(block, "http_hosts")
-	e.ConnectionDefaults = pickKVBlock(block, "connection_defaults")
-	e.VerificationStatus = normalizeVerificationStatus(pickString(block, "verification_status"))
-	e.VerifiedBy = pickList(block, "verified_by")
-	e.VerifiedAt = pickString(block, "verified_at")
-	e.VerificationNotes = pickString(block, "verification_notes")
-	e.TestedModels = pickList(block, "tested_models")
-	e.ConfigSecrets = pickList(block, "config_secrets")
-	return e, nil
+	return e.Name
 }
 
-// normalizeVerificationStatus coerces the Lua string into one of the
-// three canonical values the UI renders badges for. Anything else
-// (blank, typo, unknown) falls back to "experimental" — the safest
+// normalizeCatalogVerification coerces verification.status into one of
+// the three canonical values the UI renders badges for. Anything else
+// (absent, typo, unknown) falls back to "experimental" — the safest
 // default for a driver with no declared provenance.
+func normalizeCatalogVerification(m *Manifest) {
+	if m.Verification == nil {
+		m.Verification = &ManifestVerification{Status: "experimental"}
+		return
+	}
+	m.Verification.Status = normalizeVerificationStatus(m.Verification.Status)
+}
+
 func normalizeVerificationStatus(s string) string {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "production":
 		return "production"
 	case "beta":
 		return "beta"
-	case "experimental", "":
-		return "experimental"
 	default:
 		return "experimental"
 	}
-}
-
-var driverBlockRe = regexp.MustCompile(`(?s)DRIVER\s*=\s*\{(.*?)\n\}`)
-
-func extractDriverBlock(src string) string {
-	m := driverBlockRe.FindStringSubmatch(src)
-	if len(m) < 2 {
-		return ""
-	}
-	return m[1]
-}
-
-// pickString matches `name = "value"` inside the block.
-func pickString(block, name string) string {
-	re := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(name) + `\s*=\s*"([^"]*)"`)
-	m := re.FindStringSubmatch(block)
-	if len(m) < 2 {
-		return ""
-	}
-	return m[1]
-}
-
-// pickList matches `name = { "a", "b", "c" }` inside the block.
-func pickList(block, name string) []string {
-	re := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(name) + `\s*=\s*\{([^}]*)\}`)
-	m := re.FindStringSubmatch(block)
-	if len(m) < 2 {
-		return nil
-	}
-	items := regexp.MustCompile(`"([^"]+)"`).FindAllStringSubmatch(m[1], -1)
-	out := make([]string, 0, len(items))
-	for _, it := range items {
-		out = append(out, it[1])
-	}
-	return out
-}
-
-// kvPairRe matches `key = "string"` or `key = 123` inside a Lua table body.
-var kvPairRe = regexp.MustCompile(`(\w+)\s*=\s*(?:"([^"]*)"|([^\s,]+))`)
-
-// pickKVBlock matches a nested Lua table `name = { key = val, ... }`
-// and returns key-value pairs as a map. Values can be numbers or quoted
-// strings. Returns nil when the block is absent.
-func pickKVBlock(block, name string) map[string]any {
-	re := regexp.MustCompile(`(?s)` + regexp.QuoteMeta(name) + `\s*=\s*\{([^}]*)\}`)
-	m := re.FindStringSubmatch(block)
-	if len(m) < 2 {
-		return nil
-	}
-	pairs := kvPairRe.FindAllStringSubmatch(m[1], -1)
-	if len(pairs) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(pairs))
-	for _, p := range pairs {
-		key := p[1]
-		if p[2] != "" {
-			out[key] = p[2]
-		} else if f, err := strconv.ParseFloat(p[3], 64); err == nil {
-			if f == float64(int64(f)) {
-				out[key] = int64(f)
-			} else {
-				out[key] = f
-			}
-		} else {
-			out[key] = p[3]
-		}
-	}
-	return out
 }

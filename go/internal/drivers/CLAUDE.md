@@ -14,15 +14,17 @@ Spawns one goroutine per device driver, running a Lua 5.1 script via `yuin/gophe
 | `HostEnv` | Per-driver context: capabilities, telemetry store, identity (`host.go`). |
 | `MQTTCap` / `ModbusCap` | Capability interfaces implemented by `../mqtt` and `../modbus` (`host.go`). |
 | `MQTTMessage` | Inbound message `{topic, payload}` drained via `PopMessages` (`host.go`). |
-| `CatalogEntry` | Metadata scraped from the `DRIVER={…}` block at the top of each `.lua` file (`catalog.go`). |
+| `Manifest` | Parsed `DRIVER_MANIFEST` table — typed config schema, provides contract, catalog metadata (`manifest.go`). Parsed in a sandboxed VM; missing/malformed = load error. |
+| `CatalogEntry` | `Manifest` + path/filename/id (file stem) for one discoverable driver (`catalog.go`). |
 
 ## Public API surface
 
-- `NewRegistry(tel)` + `Add / Remove / Reload / Restart / RestartByName / Send / SendDefault / ShutdownAll / Names / Env`.
+- `NewRegistry(tel)` + `Add / Remove / Reload / Restart / RestartByName / Send / SendDefault / ShutdownAll / Names / Env`. `Add` parses + enforces the manifest (config validation, defaults), sends the `init` command verb to control-capable (non-`telemetry_only`) drivers, and honours `host.set_warmup_s`; clean stop sends `deinit` before `DefaultMode`.
+- `ParseManifest(src) / LoadManifest(path)` + `Manifest.ValidateConfig / ApplyDefaults / SecretKeys`.
 - `NewLuaDriver(path, env)` for Lua.
 - `NewHostEnv(name, tel)` + `WithMQTT / WithModbus / WithHTTP / SetEndpoint / SetMAC`.
-- `HostEnv.Identity() / FullIdentity()` for `state.RegisterDevice` wiring.
-- `LoadCatalog(dir)` walks `.lua` files and extracts the DRIVER metadata table.
+- `HostEnv.Identity() / FullIdentity()` for `state.RegisterDevice` wiring; `IdentityInfo()` adds model + rated_w for API DTOs (device_id resolution unchanged).
+- `LoadCatalog(dir)` walks `.lua` files and parses each `DRIVER_MANIFEST` (sandboxed VM — no regex).
 - Constants: `ModbusCoil` / `ModbusDiscrete` / `ModbusHolding` / `ModbusInput` for modbus read kinds.
 
 ## How it talks to neighbors
@@ -32,9 +34,11 @@ Spawns one goroutine per device driver, running a Lua 5.1 script via `yuin/gophe
 ## What to read first
 
 1. `registry.go` — `Add`, `runLoop`, `Reload`, and the `driverRuntime` adapter layer.
-2. `host.go` — HostEnv + capability interfaces + identity fields.
-3. `lua.go` — registration of the `host.*` global and the gopher-lua bridge.
-4. `catalog.go` — how the UI discovers available drivers.
+2. `manifest.go` — the DRIVER_MANIFEST contract (parse, validate, defaults); prose spec in `docs/driver-manifest.md`.
+3. `host.go` — HostEnv + capability interfaces + identity fields.
+4. `lua.go` — registration of the `host.*` global and the gopher-lua bridge.
+5. `emit_adapter.go` — canonical blixt emit keys → ftw telemetry normalization (keys, never signs).
+6. `catalog.go` — how the UI discovers available drivers.
 
 ## What NOT to do
 

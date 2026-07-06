@@ -2,25 +2,52 @@
 -- Ferroamp EnergyHub MQTT driver
 -- Emits: PV, Battery, Meter telemetry
 
-DRIVER = {
-  id           = "ferroamp",
-  name         = "Ferroamp EnergyHub",
-  manufacturer = "Ferroamp",
+DRIVER_MANIFEST = {
+  name         = "ferroamp",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "Ferroamp EnergyHub",
+  manufacturer = "Ferroamp",
   protocols    = { "mqtt" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "Ferroamp EnergyHub with ESO battery + SSO solar strings (3-phase).",
-  homepage     = "https://ferroamp.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "EnergyHub XL" },
-  verification_status = "production",
-  verified_by = { "frahlg@homelab-rpi:14d" },
-  verified_at = "2026-04-18",
-  verification_notes = "In continuous use on 3-phase 16A SE site, MPC + dispatch control loop exercised daily.",
   connection_defaults = {
     port     = 1883,
     username = "extapi",
     password = "ferroampExtApi",
+  },
+  tested_models = { "EnergyHub XL" },
+  verification = {
+    status      = "production",
+    verified_by = { "frahlg@homelab-rpi:14d" },
+    verified_at = "2026-04-18",
+    notes       = "In continuous use on 3-phase 16A SE site, MPC + dispatch control loop exercised daily.",
+  },
+  poll_interval_ms = 1000,
+  requires = {},
+  -- config.eso_capacity_kwh (map of ESO id -> kWh) is also read but is a
+  -- table value, which the manifest field schema cannot express yet.
+  options = {
+    { name = "skip_battery", purpose = "always", type = "boolean", default = false,
+      help = "Suppress battery telemetry + control for PV-only EnergyHubs (they still publish phantom ESO frames)." },
+    { name = "charge_ceil_soc", purpose = "control", type = "double", default = 0.95, min = 0.01, max = 1,
+      help = "Charge ceiling as a 0..1 SoC fraction. ESOs above it are counted charge-incapable for dispatch scaling." },
+    { name = "discharge_floor_soc", purpose = "control", type = "double", default = 0.15, min = 0, max = 0.99,
+      help = "Discharge floor as a 0..1 SoC fraction. ESOs below it are counted discharge-incapable for dispatch scaling." },
+    { name = "pplim_release_w", purpose = "control", type = "double", default = 0, min = 0, max = 1000000,
+      help = "SSO pplim published on curtail_disable, in W — set to the SSO nominal max (e.g. 15000). 0 = never publish a release (operator clears pplim from the Ferroamp portal); avoids the sticky pplim=0 trap." },
+  },
+  provides = {
+    live   = { "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh",
+               "pv.dc_W",
+               "battery.dc_W", "battery.V", "battery.A",
+               "battery.SoC_nom_fract",
+               "battery.total_charge_Wh", "battery.total_discharge_Wh" },
+    -- No sn: the EnergyHub's extapi doesn't publish a serial; identity
+    -- resolves via ARP MAC (MQTT broker = the EnergyHub itself).
+    static = { "make" },
   },
 }
 --
@@ -32,10 +59,10 @@ DRIVER = {
 -- Ferroamp payload format: {"key": {"val": value}} or {"key": {"L1": v1, "L2": v2, "L3": v3}}
 -- Energy counters are in mJ (millijoules); convert to Wh: mJ / 3,600,000
 --
--- Sign convention:
---   PV w:      always negative (generation)
---   Battery w: positive = charging, negative = discharging
---   Meter w:   positive = import, negative = export
+-- Sign convention (canonical emit keys, matches site convention):
+--   pv.dc_W:      always negative (generation)
+--   battery.dc_W: positive = charging, negative = discharging
+--   meter.ac_W:   positive = import, negative = export
 
 PROTOCOL = "mqtt"
 
@@ -527,49 +554,50 @@ function driver_poll()
 
         local meter = {}
 
-        -- Grid power: negative = exporting, positive = importing
-        meter.w    = sum_phases(pext)
-        meter.l1_w = phase_val(pext, "L1")
-        meter.l2_w = phase_val(pext, "L2")
-        meter.l3_w = phase_val(pext, "L3")
+        -- Grid power (canonical emit keys, @srcful/data-models):
+        -- negative = exporting, positive = importing.
+        meter.ac_W = sum_phases(pext)
+        meter.L1_W = phase_val(pext, "L1")
+        meter.L2_W = phase_val(pext, "L2")
+        meter.L3_W = phase_val(pext, "L3")
 
         -- Grid frequency
         if gridfreq then
-            meter.hz = tonumber(gridfreq) or 0
+            meter.Hz = tonumber(gridfreq) or 0
         end
 
         -- Per-phase voltage
-        meter.l1_v = phase_val(ul, "L1")
-        meter.l2_v = phase_val(ul, "L2")
-        meter.l3_v = phase_val(ul, "L3")
+        meter.L1_V = phase_val(ul, "L1")
+        meter.L2_V = phase_val(ul, "L2")
+        meter.L3_V = phase_val(ul, "L3")
 
         -- Per-phase grid current (from service-entrance CTs, consistent
         -- with pext above — previously read il by mistake, which is
         -- inverter AC current).
-        meter.l1_a = phase_val(iext, "L1")
-        meter.l2_a = phase_val(iext, "L2")
-        meter.l3_a = phase_val(iext, "L3")
+        meter.L1_A = phase_val(iext, "L1")
+        meter.L2_A = phase_val(iext, "L2")
+        meter.L3_A = phase_val(iext, "L3")
 
         -- Energy counters (mJ → Wh)
         if wextconsq3p then
-            meter.import_wh = mj_to_wh(wextconsq3p)
+            meter.total_import_Wh = mj_to_wh(wextconsq3p)
         end
         if wextprodq3p then
-            meter.export_wh = mj_to_wh(wextprodq3p)
+            meter.total_export_Wh = mj_to_wh(wextprodq3p)
         end
 
         host.emit("meter", meter)
         -- Diagnostics: long-format TS DB
-        if meter.l1_w then host.emit_metric("meter_l1_w", meter.l1_w) end
-        if meter.l2_w then host.emit_metric("meter_l2_w", meter.l2_w) end
-        if meter.l3_w then host.emit_metric("meter_l3_w", meter.l3_w) end
-        if meter.l1_v then host.emit_metric("meter_l1_v", meter.l1_v) end
-        if meter.l2_v then host.emit_metric("meter_l2_v", meter.l2_v) end
-        if meter.l3_v then host.emit_metric("meter_l3_v", meter.l3_v) end
-        if meter.l1_a then host.emit_metric("meter_l1_a", meter.l1_a) end
-        if meter.l2_a then host.emit_metric("meter_l2_a", meter.l2_a) end
-        if meter.l3_a then host.emit_metric("meter_l3_a", meter.l3_a) end
-        if meter.hz   then host.emit_metric("grid_hz",    meter.hz)   end
+        if meter.L1_W then host.emit_metric("meter_l1_w", meter.L1_W) end
+        if meter.L2_W then host.emit_metric("meter_l2_w", meter.L2_W) end
+        if meter.L3_W then host.emit_metric("meter_l3_w", meter.L3_W) end
+        if meter.L1_V then host.emit_metric("meter_l1_v", meter.L1_V) end
+        if meter.L2_V then host.emit_metric("meter_l2_v", meter.L2_V) end
+        if meter.L3_V then host.emit_metric("meter_l3_v", meter.L3_V) end
+        if meter.L1_A then host.emit_metric("meter_l1_a", meter.L1_A) end
+        if meter.L2_A then host.emit_metric("meter_l2_a", meter.L2_A) end
+        if meter.L3_A then host.emit_metric("meter_l3_a", meter.L3_A) end
+        if meter.Hz   then host.emit_metric("grid_hz",    meter.Hz)   end
 
         local state = extract_val(ehub_data, "state")
         if state then host.emit_metric("ehub_state", tonumber(state) or 0) end
@@ -582,7 +610,7 @@ function driver_poll()
         local ppv = choose_power(extract_val(ehub_data, "ppv"), sso_power(sso_data))
         if ppv then
             -- Negate: Ferroamp reports PV as positive, convention requires negative
-            host.emit("pv", { w = -ppv })
+            host.emit("pv", { dc_W = -ppv })
         end
     end
 
@@ -680,18 +708,18 @@ function driver_poll()
             -- update at the ESO's own publish cadence and don't get
             -- rounded through ehub's aggregate. Ferroamp convention:
             -- positive pbat = discharging, negate for site convention
-            -- (positive = charging).
-            battery = { w = -pbat_sum }
+            -- (positive = charging). Canonical emit key: dc_W.
+            battery = { dc_W = -pbat_sum }
         elseif ehub_data then
             -- No live per-ESO measurement: fall back to ehub.pbat
             -- (also positive = discharging on Ferroamp's side).
             local ehub_pbat = tonumber(extract_val(ehub_data, "pbat"))
-            if ehub_pbat then battery = { w = -ehub_pbat } end
+            if ehub_pbat then battery = { dc_W = -ehub_pbat } end
         end
 
         if battery then
-            if v_n   > 0 then battery.v = v_sum / v_n end
-            if a_n   > 0 then battery.a = a_sum end           -- sum, not avg: parallel currents add
+            if v_n   > 0 then battery.V = v_sum / v_n end
+            if a_n   > 0 then battery.A = a_sum end           -- sum, not avg: parallel currents add
 
             -- SoC selection on multi-ESO sites. Priority:
             --   1. ehub.soc — Ferroamp's own system SoC, the same number
@@ -715,15 +743,15 @@ function driver_poll()
                 soc_ehub = last_ehub_soc
             end
             if soc_ehub then
-                battery.soc = soc_ehub
+                battery.SoC_nom_fract = soc_ehub
             elseif soc_weighted then
-                battery.soc = soc_weighted
+                battery.SoC_nom_fract = soc_weighted
             elseif soc_eso_mean then
-                battery.soc = soc_eso_mean
+                battery.SoC_nom_fract = soc_eso_mean
             end
 
-            if wprod_n > 0 then battery.discharge_wh = mj_to_wh(wprod_sum) end
-            if wcons_n > 0 then battery.charge_wh    = mj_to_wh(wcons_sum) end
+            if wprod_n > 0 then battery.total_discharge_Wh = mj_to_wh(wprod_sum) end
+            if wcons_n > 0 then battery.total_charge_Wh    = mj_to_wh(wcons_sum) end
 
             -- Per-direction capability for the dispatcher's reallocation
             -- (docs/.../capability-aware-battery-reallocation). Mirrors the
@@ -737,8 +765,8 @@ function driver_poll()
             battery.charge_capable    = n_charge_capable > 0
 
             host.emit("battery", battery)
-            if battery.v then host.emit_metric("battery_dc_v", battery.v) end
-            if battery.a then host.emit_metric("battery_dc_a", battery.a) end
+            if battery.V then host.emit_metric("battery_dc_v", battery.V) end
+            if battery.A then host.emit_metric("battery_dc_a", battery.A) end
             if soc_ehub     then host.emit_metric("bat_soc_ehub",     soc_ehub)     end
             if soc_eso_mean then host.emit_metric("bat_soc_eso_mean", soc_eso_mean) end
             if soc_weighted then host.emit_metric("bat_soc_weighted", soc_weighted) end

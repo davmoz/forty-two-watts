@@ -7,22 +7,36 @@
 -- forty-two-watts v2.1 Lua host idiom. READ-ONLY driver — SMA control is
 -- not wired up here.
 
-DRIVER = {
-  id           = "sma",
-  name         = "SMA hybrid inverter",
-  manufacturer = "SMA",
+DRIVER_MANIFEST = {
+  name         = "sma",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "SMA hybrid inverter",
+  manufacturer = "SMA",
   protocols    = { "modbus" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "SMA Sunny Tripower / Sunny Boy Storage via Modbus TCP (SunSpec).",
-  homepage     = "https://www.sma.de",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "Sunny Tripower", "Sunny Boy Storage" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "Sunny Tripower", "Sunny Boy Storage" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  poll_interval_ms = 5000,
+  requires = {},
+  options  = {},
+  provides = {
+    live   = { "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh",
+               "pv.dc_W", "pv.mppts[]", "pv.total_generation_Wh",
+               "battery.dc_W", "battery.V", "battery.A",
+               "battery.SoC_nom_fract", "battery.temperature_C",
+               "battery.total_charge_Wh", "battery.total_discharge_Wh" },
+    static = { "make", "sn" },
   },
 }
 

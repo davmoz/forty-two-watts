@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/frahlg/forty-two-watts/go/internal/driverregistry"
 )
 
 // Config is the full application config.
@@ -36,6 +38,64 @@ type Config struct {
 	Notifications *Notifications     `yaml:"notifications,omitempty" json:"notifications,omitempty"`
 	Nova          *Nova              `yaml:"nova,omitempty" json:"nova,omitempty"`
 	RemoteAccess  *RemoteAccess      `yaml:"remote_access,omitempty" json:"remote_access,omitempty"`
+
+	// DriverRegistry configures the Sourceful driver-registry client used
+	// to resolve pinned `driver: name@version` refs. Nil = devnet defaults.
+	DriverRegistry *DriverRegistryConf `yaml:"driver_registry,omitempty" json:"driver_registry,omitempty"`
+}
+
+// DriverRegistryConf selects which Sourceful driver registry to fetch
+// pinned `driver: name@version` refs from and where to cache them.
+// See docs/driver-registry.md.
+type DriverRegistryConf struct {
+	// Net picks the per-network registry base:
+	// https://novacore-{net}.sourceful.dev/device-support/drivers.
+	// One of "devnet" | "testnet" | "mainnet". Default "devnet".
+	Net string `yaml:"net,omitempty" json:"net,omitempty"`
+	// URL is an explicit registry base override — beats Net when set.
+	// The DRIVER_REGISTRY_URL env var beats both (dev/self-hosted).
+	URL string `yaml:"url,omitempty" json:"url,omitempty"`
+	// CacheDir holds fetched drivers as {name}-{version}.lua. Empty =
+	// "<state dir>/driver-cache" (resolved by main.go next to state.db).
+	CacheDir string `yaml:"cache_dir,omitempty" json:"cache_dir,omitempty"`
+}
+
+// DefaultDriverRegistryNet is the registry net used when the
+// driver_registry section is absent or leaves net empty.
+const DefaultDriverRegistryNet = "devnet"
+
+// driverRegistryNetURL renders the per-net registry base URL.
+func driverRegistryNetURL(net string) string {
+	return fmt.Sprintf("https://novacore-%s.sourceful.dev/device-support/drivers", net)
+}
+
+// DriverRegistryBaseURL resolves the effective registry base URL in
+// priority order: env DRIVER_REGISTRY_URL > driver_registry.url >
+// driver_registry.net (default devnet). Nil-safe on a missing section.
+func (c *Config) DriverRegistryBaseURL() string {
+	if env := strings.TrimSpace(os.Getenv("DRIVER_REGISTRY_URL")); env != "" {
+		return env
+	}
+	net := DefaultDriverRegistryNet
+	if c.DriverRegistry != nil {
+		if u := strings.TrimSpace(c.DriverRegistry.URL); u != "" {
+			return u
+		}
+		if c.DriverRegistry.Net != "" {
+			net = c.DriverRegistry.Net
+		}
+	}
+	return driverRegistryNetURL(net)
+}
+
+// DriverRegistryCacheDir returns the configured cache dir, or "" when
+// unset — the caller (main.go) defaults it to <state dir>/driver-cache
+// because only the boot path knows the resolved state.db location.
+func (c *Config) DriverRegistryCacheDir() string {
+	if c.DriverRegistry == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.DriverRegistry.CacheDir)
 }
 
 // RemoteAccess opts the Pi into the owner remote-access home route. DEFAULT OFF:
@@ -515,8 +575,14 @@ func (f Fuse) EffectiveSafetyMarginA() float64 {
 // Driver is one driver entry. Each driver is a Lua script loaded by
 // the driver host at startup (or on hot-reload via the file watcher).
 type Driver struct {
-	Name              string  `yaml:"name" json:"name"`
-	Lua               string  `yaml:"lua,omitempty" json:"lua,omitempty"` // path to .lua file
+	Name string `yaml:"name" json:"name"`
+	Lua  string `yaml:"lua,omitempty" json:"lua,omitempty"` // path to .lua file
+	// Driver is a pinned Sourceful registry reference "name@version"
+	// (e.g. "deye@3.1.1") resolved through go/internal/driverregistry
+	// and cached locally. Mutually exclusive with Lua — exactly one of
+	// the two must be set. NOT a filesystem path: Resolve/Unresolve
+	// path rewriting leaves it untouched. See docs/driver-registry.md.
+	Driver            string  `yaml:"driver,omitempty" json:"driver,omitempty"`
 	IsSiteMeter       bool    `yaml:"is_site_meter,omitempty" json:"is_site_meter,omitempty"`
 	BatteryCapacityWh float64 `yaml:"battery_capacity_wh,omitempty" json:"battery_capacity_wh,omitempty"`
 	// MaxChargeW + MaxDischargeW set this driver's per-command power
@@ -550,6 +616,12 @@ type Driver struct {
 	// Disabled skips this driver at startup / reload. Set via the UI when
 	// you want to temporarily take a driver out without editing yaml.
 	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	// TelemetryOnly runs this driver read-only: manifest fields with
+	// purpose "control" are not enforced at validation, and the registry
+	// never dispatches command verbs to it (the watchdog's default-mode
+	// fallback is still allowed). Lets a freshly wired device be brought
+	// up before install-time control fields are filled in.
+	TelemetryOnly bool `yaml:"telemetry_only,omitempty" json:"telemetry_only,omitempty"`
 	// HasPassword is a JSON-only signal to the UI that Config["password"]
 	// holds a non-empty value on disk. Populated by MaskSecrets after the
 	// real password is blanked out so the operator can still tell apart
@@ -1145,6 +1217,9 @@ func applyDefaults(c *Config) {
 			}
 		}
 	}
+	if c.DriverRegistry != nil && c.DriverRegistry.Net == "" {
+		c.DriverRegistry.Net = DefaultDriverRegistryNet
+	}
 	if c.Nova != nil {
 		if c.Nova.MQTTPort == 0 {
 			c.Nova.MQTTPort = 1883
@@ -1190,8 +1265,19 @@ func (c *Config) Validate() error {
 		if d.IsSiteMeter {
 			siteMeters++
 		}
-		if d.Lua == "" {
-			return fmt.Errorf("driver %q: must specify `lua`", d.Name)
+		// Exactly one of `lua` (local path) or `driver` (pinned registry
+		// ref) selects the driver source. Neither = nothing to load;
+		// both = ambiguous precedence, refuse instead of guessing.
+		if d.Lua == "" && d.Driver == "" {
+			return fmt.Errorf("driver %q: must specify `lua` or `driver`", d.Name)
+		}
+		if d.Lua != "" && d.Driver != "" {
+			return fmt.Errorf("driver %q: `lua` and `driver` are mutually exclusive — set exactly one", d.Name)
+		}
+		if d.Driver != "" {
+			if _, _, err := driverregistry.ParseRef(d.Driver); err != nil {
+				return fmt.Errorf("driver %q: %w", d.Name, err)
+			}
 		}
 		if d.EffectiveMQTT() == nil && d.EffectiveModbus() == nil &&
 			d.Capabilities.HTTP == nil && d.Capabilities.WebSocket == nil &&
@@ -1310,6 +1396,13 @@ func (c *Config) Validate() error {
 	}
 	if c.Planner != nil && c.Planner.MinArbitrageSpreadOreKwh < 0 {
 		return fmt.Errorf("planner.min_arbitrage_spread_ore_kwh must be ≥ 0, got %g", c.Planner.MinArbitrageSpreadOreKwh)
+	}
+	if dr := c.DriverRegistry; dr != nil {
+		switch dr.Net {
+		case "", "devnet", "testnet", "mainnet":
+		default:
+			return fmt.Errorf("driver_registry.net must be \"devnet\", \"testnet\" or \"mainnet\", got %q", dr.Net)
+		}
 	}
 	return nil
 }

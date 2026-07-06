@@ -17,22 +17,36 @@
 -- convention (positive = export on Huawei), so meter power + per-phase
 -- power + per-phase current are all negated at the boundary.
 
-DRIVER = {
-  id           = "huawei-sun2000",
-  name         = "Huawei SUN2000 Hybrid Inverter",
-  manufacturer = "Huawei",
+DRIVER_MANIFEST = {
+  name         = "huawei-sun2000",
   version      = "1.0.0",
+  role         = "hybrid",
+  display_name = "Huawei SUN2000 Hybrid Inverter",
+  manufacturer = "Huawei",
   protocols    = { "modbus" },
-  capabilities = { "meter", "pv", "battery" },
-  description  = "Huawei SUN2000 hybrid inverters with LUNA2000 battery via Modbus TCP.",
-  homepage     = "https://solar.huawei.com",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "SUN2000L1", "SUN2000-LUNA2000" },
-  verification_status = "experimental",
-  verification_notes = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   connection_defaults = {
     port    = 502,
     unit_id = 1,
+  },
+  tested_models = { "SUN2000L1", "SUN2000-LUNA2000" },
+  verification = {
+    status = "experimental",
+    notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
+  },
+  poll_interval_ms = 5000,
+  requires = {},
+  options  = {},
+  provides = {
+    live   = { "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh",
+               "pv.dc_W", "pv.mppts[]", "pv.total_generation_Wh",
+               "battery.dc_W", "battery.V", "battery.A",
+               "battery.SoC_nom_fract", "battery.temperature_C",
+               "battery.total_charge_Wh", "battery.total_discharge_Wh" },
+    static = { "make", "sn" },
   },
 }
 

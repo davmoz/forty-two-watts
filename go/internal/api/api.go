@@ -26,6 +26,7 @@ import (
 	"github.com/frahlg/forty-two-watts/go/internal/battery"
 	"github.com/frahlg/forty-two-watts/go/internal/config"
 	"github.com/frahlg/forty-two-watts/go/internal/control"
+	"github.com/frahlg/forty-two-watts/go/internal/driverregistry"
 	"github.com/frahlg/forty-two-watts/go/internal/drivers"
 	"github.com/frahlg/forty-two-watts/go/internal/evcloud"
 	"github.com/frahlg/forty-two-watts/go/internal/events"
@@ -134,6 +135,11 @@ type Deps struct {
 	DriverMQTTFactory   func(name string, c *config.MQTTConfig) (drivers.MQTTCap, error)
 	DriverModbusFactory func(name string, c *config.ModbusConfig) (drivers.ModbusCap, error)
 	DriverARPLookup     func(host string) (mac string, ok bool)
+
+	// DriverRegistry is the Sourceful driver-registry client (pinned
+	// name@version fetch + local cache). Nil disables /api/registry/*
+	// (returns 503) and registry refs in /api/drivers/test probes.
+	DriverRegistry *driverregistry.Client
 
 	// Optional: background version-check + updater-sidecar dispatch.
 	// Nil disables every /api/version/* endpoint (returns 503).
@@ -262,6 +268,12 @@ type Server struct {
 	savingsCache   map[string]daySavings
 
 	versionUpdateMu sync.Mutex
+
+	// registryCache is the 5-min TTL cache in front of the Sourceful
+	// driver registry (see api_registry.go). Lazily allocated; nil map
+	// is a valid empty cache.
+	registryCacheMu sync.Mutex
+	registryCache   map[string]registryCacheEntry
 }
 
 // New creates a new API server.
@@ -311,6 +323,11 @@ func (s *Server) routes() {
 	s.handle("POST /api/battery_covers_ev", s.handleSetBatteryCoversEV)
 	s.handle("GET  /api/drivers", s.handleDrivers)
 	s.handle("GET  /api/drivers/catalog", s.handleDriversCatalog)
+	// Sourceful driver registry proxy (api_registry.go).
+	s.handle("GET  /api/registry/drivers", s.handleRegistryDrivers)
+	s.handle("GET  /api/registry/drivers/{name}/versions", s.handleRegistryDriverVersions)
+	s.handle("GET  /api/registry/drivers/{name}/{version}/manifest", s.handleRegistryDriverManifest)
+	s.handle("POST /api/registry/refresh", s.handleRegistryRefresh)
 	s.handle("POST /api/drivers/test", s.handleDriverTest)
 	s.handle("GET  /api/drivers/{name}", s.handleDriverDetail)
 	s.handle("GET  /api/drivers/{name}/logs", s.handleDriverLogs)
@@ -1085,10 +1102,12 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // driverSecretKeys returns a map[lua-path]→[]secret-key built from the
-// drivers/ catalog. Used by handleGetConfig + handlePostConfig to scope
-// which `Driver.Config[*]` keys participate in the mask/restore cycle.
-// On catalog read errors returns nil — handlers then skip the secrets
-// pass entirely (fail-open: they still mask the structured fields).
+// drivers/ catalog. Secret keys are the manifest requires/options
+// fields marked `secret = true`. Used by handleGetConfig +
+// handlePostConfig to scope which `Driver.Config[*]` keys participate
+// in the mask/restore cycle. On catalog read errors returns nil —
+// handlers then skip the secrets pass entirely (fail-open: they still
+// mask the structured fields).
 func (s *Server) driverSecretKeys() map[string][]string {
 	dir := s.deps.DriverDir
 	if dir == "" {
@@ -1100,17 +1119,18 @@ func (s *Server) driverSecretKeys() map[string][]string {
 	}
 	out := make(map[string][]string, len(entries))
 	for _, e := range entries {
-		if len(e.ConfigSecrets) == 0 {
+		secrets := e.SecretKeys()
+		if len(secrets) == 0 {
 			continue
 		}
 		path := filepath.ToSlash(e.Path)
-		out[path] = e.ConfigSecrets
+		out[path] = secrets
 		base := filepath.ToSlash(filepath.Base(dir))
 		if rel, ok := strings.CutPrefix(path, base+"/"); ok {
 			// Config round-trips paths resolved via -drivers as
 			// "drivers/<rel>" regardless of the actual directory name.
 			// Keep catalog secret matching on that portable alias too.
-			out[filepath.ToSlash(filepath.Join("drivers", rel))] = e.ConfigSecrets
+			out[filepath.ToSlash(filepath.Join("drivers", rel))] = secrets
 		}
 	}
 	return out
@@ -1232,6 +1252,17 @@ func (s *Server) handlePostConfig(w http.ResponseWriter, r *http.Request) {
 
 	if err := newCfg.Validate(); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "validation: " + err.Error()})
+		return
+	}
+	// Manifest validation (typed per-driver config fields). Returned both
+	// as a joined `error` string (existing UI contract) and as a
+	// `manifest_errors` list so the settings form can render each message
+	// against the offending field. See api_config_manifest.go.
+	if merrs := s.driverManifestErrors(&newCfg); len(merrs) > 0 {
+		writeJSON(w, 400, map[string]any{
+			"error":           "validation: " + strings.Join(merrs, "; "),
+			"manifest_errors": merrs,
+		})
 		return
 	}
 	// Diff against the live config BEFORE we mutate the shared pointer —
@@ -2395,14 +2426,18 @@ var validV2XActions = map[string]bool{
 
 const maxManualV2XPowerW = 50000
 
-func catalogHasCapability(entries []drivers.CatalogEntry, luaPath, capability string) bool {
+// catalogEmits reports whether the driver's manifest promises a live
+// emit on the given event type (provides.live entries are namespaced
+// "event.field", e.g. "v2x_charger.w").
+func catalogEmits(entries []drivers.CatalogEntry, luaPath, event string) bool {
 	base := filepath.Base(luaPath)
+	prefix := event + "."
 	for _, entry := range entries {
 		if entry.Path != luaPath && entry.Filename != base && filepath.Base(entry.Path) != base {
 			continue
 		}
-		for _, cap := range entry.Capabilities {
-			if cap == capability {
+		for _, live := range entry.Provides.Live {
+			if live == event || strings.HasPrefix(live, prefix) {
 				return true
 			}
 		}
@@ -2424,7 +2459,7 @@ func (s *Server) configuredV2XDrivers() map[string]bool {
 		if d.Disabled || d.Name == "" {
 			continue
 		}
-		if catalogHasCapability(catalog, d.Lua, telemetry.DerV2X.String()) ||
+		if catalogEmits(catalog, d.Lua, telemetry.DerV2X.String()) ||
 			strings.Contains(strings.ToLower(filepath.Base(d.Lua)), "v2x") {
 			out[d.Name] = true
 		}

@@ -12,18 +12,27 @@
 // the Lua VM:
 //
 //	host.log(level, msg)            -- level: "debug"|"info"|"warn"|"error"
-//	host.emit(type, table)          -- type: "meter"|"pv"|"battery"|"ev"|"v2x_charger"
-//	host.millis()                   -- ms since driver start
+//	host.log(msg)                   -- single-arg form → info (blixt compat)
+//	host.emit(type, table)          -- type: "meter"|"pv"|"battery"|"inverter"|"ev"|"vehicle"|"v2x_charger"
+//	                                -- accepts canonical blixt keys (dc_W, ac_W,
+//	                                -- SoC_nom_fract, L1_V, mppts[], …) and ftw
+//	                                -- legacy keys; see emit_adapter.go
+//	host.millis()                   -- ms since driver start (monotonic)
+//	host.now_ms()                   -- wall-clock ms since epoch
 //	host.sleep(ms)                  -- block driver goroutine for ms (inter-write pacing)
 //	host.set_poll_interval(ms)
-//	host.set_sn(s)                  -- device serial (metadata)
-//	host.set_make(s)                -- manufacturer name
+//	host.set_sn(s)                  -- device serial (identity anchor)
+//	host.set_make(s)                -- manufacturer name (identity anchor)
+//	host.set_model(s)               -- model string (descriptive)
+//	host.set_rated_w(w)             -- nameplate AC rating
+//	host.set_warmup_s(n)            -- post-init command-dispatch hold
 //	host.mqtt_sub(topic)            -- subscribe
 //	host.mqtt_pub(topic, payload)   -- publish
 //	host.mqtt_messages()            -- array of {topic, payload} since last call
 //	host.modbus_read(addr, count, kind)  -- kind: "coil"|"discrete"|"holding"|"input"
-//	host.modbus_write(addr, value)
-//	host.modbus_write_multi(addr, values)
+//	                                     -- kind optional, defaults "holding"
+//	host.modbus_write(addr, value)       -- alias: host.write
+//	host.modbus_write_multi(addr, values) -- alias: host.write_registers
 //	host.json_decode(s)             -- convenience JSON → Lua table
 //	host.json_encode(t)             -- Lua table → JSON string
 //	host.http_get(url, headers)     -- HTTP GET, returns (body, nil) or (nil, err)
@@ -47,6 +56,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	net_http "net/http"
 	net_url "net/url"
 	"os"
@@ -202,25 +212,33 @@ func registerHost(L *lua.LState, env *HostEnv) {
 	host := L.NewTable()
 
 	host.RawSetString("log", L.NewFunction(func(L *lua.LState) int {
+		// Single-arg form (blixt drivers): host.log(msg) → info.
+		if L.GetTop() == 1 {
+			env.log(logInfo, L.CheckString(1))
+			return 0
+		}
 		level := L.CheckString(1)
 		msg := L.CheckString(2)
-		lvl := int32(1) // info
+		lvl := logInfo
 		switch level {
 		case "debug":
-			lvl = 0
+			lvl = logDebug
 		case "warn":
-			lvl = 2
+			lvl = logWarn
 		case "error":
-			lvl = 3
+			lvl = logError
 		}
 		env.log(lvl, msg)
 		return 0
 	}))
 
-	// host.emit("meter"|"pv"|"battery"|"ev"|"v2x_charger"|"vehicle", { w=…, soc=…, … })
-	// The type string is prepended to the table as a `type` field and
-	// the whole thing is serialized as JSON before hitting the telemetry store.
-	// Allowed fields per type:
+	// host.emit("meter"|"pv"|"battery"|"inverter"|"ev"|"v2x_charger"|"vehicle", { w=…, soc=…, … })
+	// Payloads pass through the canonical emit adapter (emit_adapter.go):
+	// blixt canonical keys (dc_W / ac_W / SoC_nom_fract / L1_V / mppts[] /
+	// temperature_C, exact case) are accepted alongside the ftw legacy
+	// keys below and normalized before hitting the telemetry store. The
+	// "inverter" event routes to the emit_metric pathway (diagnostics,
+	// no DER reading). Legacy fields per type:
 	//   meter   -> w, l1_w, l2_w, l3_w, l1_v, l2_v, l3_v, l1_a, l2_a, l3_a, freq_hz
 	//   pv      -> w, mppt1_v, mppt1_a, mppt2_v, mppt2_a, dc_v
 	//   battery -> w, soc, dc_v, dc_a, temp_c,
@@ -254,13 +272,7 @@ func registerHost(L *lua.LState, env *HostEnv) {
 		if !ok {
 			m = map[string]any{}
 		}
-		m["type"] = typ
-		blob, err := json.Marshal(m)
-		if err != nil {
-			L.Push(lua.LString("encode failed: " + err.Error()))
-			return 1
-		}
-		if err := env.emitTelemetry(blob); err != nil {
+		if err := env.emitEvent(typ, m); err != nil {
 			L.Push(lua.LString(err.Error()))
 			return 1
 		}
@@ -287,6 +299,13 @@ func registerHost(L *lua.LState, env *HostEnv) {
 
 	host.RawSetString("millis", L.NewFunction(func(L *lua.LState) int {
 		L.Push(lua.LNumber(env.millis()))
+		return 1
+	}))
+
+	// host.now_ms() — wall-clock ms since epoch. For real-time rate
+	// enforcement in drivers (poll_count is meaningless across restarts).
+	host.RawSetString("now_ms", L.NewFunction(func(L *lua.LState) int {
+		L.Push(lua.LNumber(time.Now().UnixMilli()))
 		return 1
 	}))
 
@@ -328,6 +347,24 @@ func registerHost(L *lua.LState, env *HostEnv) {
 
 	host.RawSetString("set_make", L.NewFunction(func(L *lua.LState) int {
 		env.setMake(L.CheckString(1))
+		return 0
+	}))
+
+	host.RawSetString("set_model", L.NewFunction(func(L *lua.LState) int {
+		env.setModel(L.CheckString(1))
+		return 0
+	}))
+
+	host.RawSetString("set_rated_w", L.NewFunction(func(L *lua.LState) int {
+		env.setRatedW(float64(L.CheckNumber(1)))
+		return 0
+	}))
+
+	// host.set_warmup_s(n) — post-init settle hold: the registry
+	// suppresses command dispatch (polls keep running) for n seconds
+	// after the driver_command("init", 0) verb.
+	host.RawSetString("set_warmup_s", L.NewFunction(func(L *lua.LState) int {
+		env.setWarmupS(L.CheckInt(1))
 		return 0
 	}))
 
@@ -404,7 +441,7 @@ func registerHost(L *lua.LState, env *HostEnv) {
 	host.RawSetString("modbus_read", L.NewFunction(func(L *lua.LState) int {
 		addr := L.CheckInt(1)
 		count := L.CheckInt(2)
-		kindS := L.CheckString(3)
+		kindS := L.OptString(3, "holding") // blixt drivers may omit kind
 		if env.Modbus == nil {
 			L.Push(lua.LNil)
 			L.Push(lua.LString("no modbus capability"))
@@ -430,7 +467,7 @@ func registerHost(L *lua.LState, env *HostEnv) {
 		return 1
 	}))
 
-	host.RawSetString("modbus_write", L.NewFunction(func(L *lua.LState) int {
+	modbusWrite := L.NewFunction(func(L *lua.LState) int {
 		addr := L.CheckInt(1)
 		val := L.CheckInt(2)
 		if env.Modbus == nil {
@@ -442,9 +479,11 @@ func registerHost(L *lua.LState, env *HostEnv) {
 			return 1
 		}
 		return 0
-	}))
+	})
+	host.RawSetString("modbus_write", modbusWrite)
+	host.RawSetString("write", modbusWrite) // blixt alias
 
-	host.RawSetString("modbus_write_multi", L.NewFunction(func(L *lua.LState) int {
+	modbusWriteMulti := L.NewFunction(func(L *lua.LState) int {
 		addr := L.CheckInt(1)
 		t := L.CheckTable(2)
 		if env.Modbus == nil {
@@ -462,7 +501,9 @@ func registerHost(L *lua.LState, env *HostEnv) {
 			return 1
 		}
 		return 0
-	}))
+	})
+	host.RawSetString("modbus_write_multi", modbusWriteMulti)
+	host.RawSetString("write_registers", modbusWriteMulti) // blixt alias
 
 	// Decode helpers for Modbus registers. Drivers read raw u16[] and
 	// need to combine pairs back into u32/i32. LE = little-endian
@@ -494,6 +535,36 @@ func registerHost(L *lua.LState, env *HostEnv) {
 	host.RawSetString("decode_i16", L.NewFunction(func(L *lua.LState) int {
 		v := int16(L.CheckInt(1))
 		L.Push(lua.LNumber(v))
+		return 1
+	}))
+	host.RawSetString("decode_u16", L.NewFunction(func(L *lua.LState) int {
+		L.Push(lua.LNumber(uint16(L.CheckInt(1))))
+		return 1
+	}))
+	// decode_f32_be(hi, lo) — IEEE-754 float32, hi word first.
+	host.RawSetString("decode_f32_be", L.NewFunction(func(L *lua.LState) int {
+		hi := uint32(L.CheckInt(1)) & 0xFFFF
+		lo := uint32(L.CheckInt(2)) & 0xFFFF
+		L.Push(lua.LNumber(math.Float32frombits((hi << 16) | lo)))
+		return 1
+	}))
+	// decode_string(regs, start, count) — ASCII packed 2 chars/register,
+	// hi byte then lo byte, reading `count` registers from 1-based index
+	// `start`. Trailing NULs and spaces trimmed.
+	host.RawSetString("decode_string", L.NewFunction(func(L *lua.LState) int {
+		regs := L.CheckTable(1)
+		start := L.CheckInt(2)
+		count := L.CheckInt(3)
+		buf := make([]byte, 0, count*2)
+		for i := 0; i < count; i++ {
+			n, ok := regs.RawGetInt(start + i).(lua.LNumber)
+			if !ok {
+				break
+			}
+			r := uint16(n)
+			buf = append(buf, byte(r>>8), byte(r&0xFF))
+		}
+		L.Push(lua.LString(strings.TrimRight(string(buf), "\x00 ")))
 		return 1
 	}))
 

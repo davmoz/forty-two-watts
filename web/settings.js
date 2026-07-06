@@ -84,6 +84,18 @@
 
   saveBtn.addEventListener("click", function () {
     captureCurrentTab();
+    // Per-tab pre-save validation hook (e.g. the Devices tab checks
+    // required manifest fields). Returning a non-empty string aborts
+    // the save; the tab has already decorated the offending fields.
+    var def = S.tabs[currentTab];
+    if (def && typeof def.validate === "function") {
+      var verr = null;
+      try { verr = def.validate(makeCtx()); } catch (e) { console.error("tab validate:", currentTab, e); }
+      if (verr) {
+        setStatus(verr, "error");
+        return;
+      }
+    }
     setStatus("Saving...");
     ownerFetch("/api/config", {
       method: "POST",
@@ -108,6 +120,13 @@
         }
       })
       .catch(function (e) {
+        // Give the current tab a chance to surface the failure inline
+        // (the Devices tab maps manifest-validation messages onto the
+        // offending fields). The status line still shows regardless.
+        var def2 = S.tabs[currentTab];
+        if (def2 && typeof def2.onSaveError === "function") {
+          try { def2.onSaveError(e.message, makeCtx()); } catch (e2) { console.error("tab onSaveError:", currentTab, e2); }
+        }
         setStatus("Save failed: " + e.message, "error");
       });
   });
@@ -268,13 +287,11 @@
     return div.innerHTML;
   }
 
-  function renderTab(tab) {
-    var def = S.tabs[tab];
-    if (!def) {
-      bodyEl.innerHTML = '<p style="color:var(--text-dim)">Unknown tab: ' + escHtml(tab) + '</p>';
-      return;
-    }
-    var ctx = {
+  // makeCtx builds the helper context handed to every tab hook
+  // (render / after / validate / onSaveError). Built fresh per call so
+  // `config` always points at the live currentConfig.
+  function makeCtx() {
+    return {
       config: currentConfig,
       bodyEl: bodyEl,
       field: field,
@@ -287,6 +304,15 @@
       renderTab: renderTab,
       ownerFetch: ownerFetch,
     };
+  }
+
+  function renderTab(tab) {
+    var def = S.tabs[tab];
+    if (!def) {
+      bodyEl.innerHTML = '<p style="color:var(--text-dim)">Unknown tab: ' + escHtml(tab) + '</p>';
+      return;
+    }
+    var ctx = makeCtx();
     var html = "";
     try {
       html = (def.render ? def.render(ctx) : "") || "";

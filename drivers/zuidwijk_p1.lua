@@ -8,21 +8,37 @@
 --           meter data (rare in NL) must be decrypted by an external proxy
 --           before reaching this driver.
 
-DRIVER = {
-  id           = "zuidwijk-p1",
-  name         = "Zuidwijk P1 Reader Ethernet",
-  manufacturer = "Zuidwijk",
+DRIVER_MANIFEST = {
+  name         = "zuidwijk-p1",
   version      = "1.0.0",
+  role         = "meter",
+  display_name = "Zuidwijk P1 Reader Ethernet",
+  manufacturer = "Zuidwijk",
   protocols    = { "tcp" },
-  capabilities = { "meter" },
-  description  = "Dutch DSMR P1 smart-meter via Zuidwijk Serial-to-Ethernet bridge (raw TCP, port 23).",
-  homepage     = "https://www.zuidwijk.com/product/p1-reader-ethernet/",
-  authors      = { "forty-two-watts contributors" },
-  tested_models = { "Sagemcom T210-D", "Kaifa MA105/MA304", "Iskra ME382" },
-  verification_status = "experimental",
-  verification_notes = "Implemented from DSMR 5.0 spec; not yet exercised against live hardware.",
   connection_defaults = {
     port = 23,
+  },
+  tested_models = { "Sagemcom T210-D", "Kaifa MA105/MA304", "Iskra ME382" },
+  verification = {
+    status = "experimental",
+    notes  = "Implemented from DSMR 5.0 spec; not yet exercised against live hardware.",
+  },
+  poll_interval_ms = 1000,
+  requires = {
+    { name = "host", purpose = "always", type = "string",
+      help = "IP of the P1 Reader Ethernet bridge (e.g. 192.168.1.40 — find it in your router's client list)." },
+  },
+  options = {
+    { name = "port", purpose = "always", type = "integer", default = 23, min = 1, max = 65535,
+      help = "Raw TCP port the bridge streams DSMR telegrams on. Stock firmware uses 23." },
+  },
+  provides = {
+    live   = { "meter.ac_W",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh" },
+    static = { "make", "sn" },
   },
 }
 --
