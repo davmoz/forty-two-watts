@@ -659,9 +659,15 @@
       <input type="number" id="drv-battery-kwh" value="10" min="0" step="0.1">
     </div>
 
-    <!-- Dynamic per-driver secret inputs (Auth-Token etc.). prefillDriverConfig
-         populates this from the catalog entry's config_secrets list. -->
-    <div id="drv-secrets-group"></div>
+    <!-- Device settings generated from the driver's DRIVER_MANIFEST
+         requires/options schema (typed inputs, bounds, help, secrets).
+         prefillDriverConfig renders it via settings/manifest-form.js. -->
+    <div id="drv-manifest-group"></div>
+
+    <div class="form-check">
+      <input type="checkbox" id="drv-telemetry-only">
+      <label for="drv-telemetry-only">Read-only (telemetry only) — no control commands; control settings become optional</label>
+    </div>
 
     <div class="wizard-actions">
       <button class="btn-secondary" onclick="goStep(4)">Back</button>
@@ -813,6 +819,7 @@
      /next dashboard catalogue (ftw-energy-flow etc.) — dead weight on
      the first setup paint. -->
 <script type="module" src="/components/ftw-update-check.js"></script>
+<script src="/settings/manifest-form.js?v=mf1"></script>
 <script src="/setup.js"></script>
 </body>
 </html>
