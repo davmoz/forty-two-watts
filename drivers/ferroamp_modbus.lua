@@ -34,11 +34,21 @@ DRIVER_MANIFEST = {
     status = "experimental",
     notes  = "Ported from sourceful-hugin. Read-only telemetry; control still goes through drivers/ferroamp.lua (MQTT). Not yet verified against live hardware.",
   },
+  poll_interval_ms = 5000,
   requires = {},
   options  = {},
   provides = {
-    live   = { "meter.ac_W", "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
-    static = { "make", "sn" },
+    live   = { "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh",
+               "pv.dc_W", "pv.total_generation_Wh",
+               "battery.dc_W", "battery.SoC_nom_fract",
+               "battery.total_charge_Wh", "battery.total_discharge_Wh" },
+    -- No sn: the EnergyHub exposes no stable serial register; identity
+    -- resolves via ARP MAC or the configured endpoint.
+    static = { "make" },
   },
 }
 

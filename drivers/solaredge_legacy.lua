@@ -43,13 +43,14 @@ DRIVER_MANIFEST = {
     status = "experimental",
     notes  = "First-cut clone of solaredge.lua targeting K-series display inverters. Curtail path mirrors solaredge.lua (verified there in 25/50/75% sweep on HD-Wave 8 kW). K-series support documented in SolarEdge Power Reduction Application Note but not yet verified on this firmware family.",
   },
+  poll_interval_ms = 5000,
   requires = {},
   options = {
-    { name = "nominal_w", purpose = "control", type = "integer",
-      help = "Inverter nameplate AC power in W, used to convert curtail watt targets to percent." },
+    { name = "nominal_w", purpose = "control", type = "integer", min = 100, max = 200000,
+      help = "Inverter nameplate AC power in W (from the datasheet), used to convert curtail watt targets to a 0-100% Active Power Limit. Curtail is unavailable until set." },
   },
   provides = {
-    live   = { "pv.dc_W" },
+    live   = { "pv.dc_W", "pv.mppts[]", "pv.total_generation_Wh" },
     static = { "make", "sn" },
   },
 }

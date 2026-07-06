@@ -19,10 +19,17 @@ DRIVER_MANIFEST = {
     status = "experimental",
     notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   },
+  poll_interval_ms = 5000,
   requires = {},
   options  = {},
   provides = {
-    live   = { "meter.ac_W" },
+    live   = { "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh" },
+    -- No sn: the SDM630 has no serial-number register; identity
+    -- resolves via ARP MAC or the configured endpoint.
     static = { "make" },
   },
 }

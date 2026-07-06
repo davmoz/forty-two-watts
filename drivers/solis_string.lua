@@ -21,15 +21,16 @@ DRIVER_MANIFEST = {
     status = "experimental",
     notes  = "Read-only PV driver. Awaiting field verification on a 42W site.",
   },
+  poll_interval_ms = 5000,
   requires = {},
   options = {
     { name = "serial", purpose = "always", type = "string",
-      help = "Override the serial read off the bus." },
+      help = "Device serial used for the stable device_id (this map has no reliable serial register). Find it on the inverter's nameplate sticker." },
     { name = "sn", purpose = "always", type = "string",
-      help = "Alias of serial." },
+      help = "Alias of serial; serial wins when both are set." },
   },
   provides = {
-    live   = { "pv.dc_W" },
+    live   = { "pv.dc_W", "pv.mppts[]", "pv.total_generation_Wh" },
     static = { "make", "sn" },
   },
 }

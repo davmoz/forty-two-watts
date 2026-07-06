@@ -12,18 +12,25 @@ DRIVER_MANIFEST = {
   manufacturer = "Kostal",
   protocols    = { "modbus" },
   connection_defaults = {
-    port    = 502,
-    unit_id = 1,
+    port    = 1502, -- Kostal's factory Modbus TCP port (not 502)
+    unit_id = 71,   -- Kostal's factory unit id
   },
   tested_models = { "Plenticore Plus", "Piko IQ" },
   verification = {
     status = "experimental",
     notes  = "Ported from a reference implementation. Not yet verified against live hardware on a 42W site.",
   },
+  poll_interval_ms = 5000,
   requires = {},
   options  = {},
   provides = {
-    live   = { "meter.ac_W", "pv.dc_W", "battery.dc_W", "battery.SoC_nom_fract" },
+    live   = { "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh",
+               "pv.dc_W", "pv.mppts[]", "pv.total_generation_Wh",
+               "battery.dc_W", "battery.SoC_nom_fract" },
     static = { "make", "sn" },
   },
 }

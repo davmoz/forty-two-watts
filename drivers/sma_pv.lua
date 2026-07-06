@@ -21,13 +21,22 @@ DRIVER_MANIFEST = {
   },
   tested_models = { "Sunny Tripower STP 50-40 (CORE1)", "Sunny Tripower STP 50-41 (CORE2)" },
   verification = {
-    status = "tested",
+    -- "beta", not "tested": the catalog only knows experimental | beta |
+    -- production (anything else normalizes to experimental, hiding the
+    -- live verification below).
+    status = "beta",
     notes  = "Telemetry + curtailment verified live on 3x STP 50-40 and 1x STP 50-41. Curtailment settles within ~2 s; steady-state tracking error <=0.6% of setpoint.",
   },
+  poll_interval_ms = 5000,
   requires = {},
   options  = {},
   provides = {
-    live   = { "pv.dc_W", "meter.ac_W" },
+    live   = { "pv.dc_W", "pv.mppts[]", "pv.total_generation_Wh",
+               "meter.ac_W", "meter.Hz",
+               "meter.L1_V", "meter.L2_V", "meter.L3_V",
+               "meter.L1_A", "meter.L2_A", "meter.L3_A",
+               "meter.L1_W", "meter.L2_W", "meter.L3_W",
+               "meter.total_import_Wh", "meter.total_export_Wh" },
     static = { "make", "sn" },
   },
 }
