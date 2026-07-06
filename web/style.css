@@ -1920,6 +1920,35 @@ body.advanced #ui-mode-toggle { color: #fbbf24; }
   font-weight: 500;
   margin: 12px 0 6px;
 }
+.mf-field > label:not(.mf-check) {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--fg-muted);
+  font-weight: 500;
+  margin: 0 0 4px;
+}
+.mf-field input[type="text"],
+.mf-field input[type="number"],
+.mf-field input[type="password"],
+.mf-field select {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--ink-raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 0.9rem;
+}
+.mf-field input:focus,
+.mf-field select:focus {
+  border-color: var(--accent-e);
+  outline: none;
+}
 .mf-hint {
   color: var(--fg-muted);
   font-size: 0.75rem;
