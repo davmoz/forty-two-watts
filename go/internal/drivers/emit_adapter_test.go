@@ -153,7 +153,9 @@ end
 	}
 }
 
-// pv mppts[] fans out into TS DB series mppt{n}_v/a/w.
+// pv mppts[] fans out into the pv_mppt{n}_v/a/w TS DB series (the names
+// every bundled driver already records) and mirrors each row onto the
+// legacy flat Data keys (mppt1_v, …) the nova payload reads.
 func TestEmitAdapterPVMPPTs(t *testing.T) {
 	d, tel, _ := loadTestDriver(t, `
 function driver_poll()
@@ -171,23 +173,84 @@ end
 	if rd == nil || rd.RawW != -4200 {
 		t.Fatalf("pv reading: %+v", rd)
 	}
-	var data struct {
-		LifetimeWh *float64 `json:"lifetime_wh"`
-	}
+	var data map[string]any
 	if err := json.Unmarshal(rd.Data, &data); err != nil {
 		t.Fatal(err)
 	}
-	if data.LifetimeWh == nil || *data.LifetimeWh != 123456 {
-		t.Errorf("lifetime_wh mirror = %v", data.LifetimeWh)
+	if got, _ := data["lifetime_wh"].(float64); got != 123456 {
+		t.Errorf("lifetime_wh mirror = %v", data["lifetime_wh"])
+	}
+	for k, want := range map[string]float64{
+		"mppt1_v": 380, "mppt1_a": -5.5, "mppt1_w": -2090,
+		"mppt2_v": 390, "mppt2_a": -5.4, "mppt2_w": -2110,
+	} {
+		if got, _ := data[k].(float64); got != want {
+			t.Errorf("legacy Data mirror %s = %v, want %v", k, data[k], want)
+		}
 	}
 	samples := tel.FlushSamples()
 	for metric, want := range map[string]float64{
-		"mppt1_v": 380, "mppt1_a": -5.5, "mppt1_w": -2090,
-		"mppt2_v": 390, "mppt2_a": -5.4, "mppt2_w": -2110,
+		"pv_mppt1_v": 380, "pv_mppt1_a": -5.5, "pv_mppt1_w": -2090,
+		"pv_mppt2_v": 390, "pv_mppt2_a": -5.4, "pv_mppt2_w": -2110,
 	} {
 		if !sawMetricValue(samples, "adapter", metric, want) {
 			t.Errorf("missing TS sample %s=%v", metric, want)
 		}
+	}
+}
+
+// A driver already emitting a flat legacy mppt key keeps its own value —
+// the mppts[] mirror must not overwrite it.
+func TestEmitAdapterMPPTLegacyKeysWin(t *testing.T) {
+	d, tel, _ := loadTestDriver(t, `
+function driver_poll()
+    host.emit("pv", {
+        dc_W = -100,
+        mppt1_v = 111,
+        mppts = { {V=380} },
+    })
+end
+`)
+	if _, err := d.Poll(context.Background()); err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	rd := tel.Get("adapter", telemetry.DerPV)
+	if rd == nil {
+		t.Fatal("no pv reading")
+	}
+	var data map[string]any
+	if err := json.Unmarshal(rd.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := data["mppt1_v"].(float64); got != 111 {
+		t.Errorf("driver's own mppt1_v = %v, want 111 (mirror must not clobber)", data["mppt1_v"])
+	}
+}
+
+// Canonical meter energy counters mirror onto the legacy import_wh /
+// export_wh Data names.
+func TestEmitAdapterMeterEnergyMirror(t *testing.T) {
+	d, tel, _ := loadTestDriver(t, `
+function driver_poll()
+    host.emit("meter", { ac_W = 100, total_import_Wh = 5000, total_export_Wh = 700 })
+end
+`)
+	if _, err := d.Poll(context.Background()); err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	rd := tel.Get("adapter", telemetry.DerMeter)
+	if rd == nil {
+		t.Fatal("no meter reading")
+	}
+	var data map[string]any
+	if err := json.Unmarshal(rd.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := data["import_wh"].(float64); got != 5000 {
+		t.Errorf("import_wh mirror = %v, want 5000", data["import_wh"])
+	}
+	if got, _ := data["export_wh"].(float64); got != 700 {
+		t.Errorf("export_wh mirror = %v, want 700", data["export_wh"])
 	}
 }
 

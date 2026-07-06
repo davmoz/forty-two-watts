@@ -121,8 +121,10 @@ a fallback for `dc_W`/`ac_W`:
 - **meter**: `ac_W` (+import / −export), `Hz`,
   `L1_V`/`L1_A`/`L1_W` (… L2, L3), `total_import_Wh`, `total_export_Wh`.
 - **pv**: `dc_W` (− = generating), `total_generation_Wh`,
-  `mppts = { {V=,A=,W=}, … }` — fanned out to `mppt{n}_v/a/w` TS-DB
-  series.
+  `mppts = { {V=,A=,W=}, … }` — fanned out to `pv_mppt{n}_v/a/w` TS-DB
+  series (the names bundled drivers already record) and mirrored onto
+  the flat `mppt{n}_v/a/w` Data keys when the driver didn't emit them
+  itself.
 - **inverter** (new event): `ac_W`, `VA`, `Hz`, `L*_*`, `heatsink_C`,
   `rated_W`, `available_import_W`, `available_export_W` — routed to the
   TS DB via the `emit_metric` pathway (structured diagnostics, no DER
