@@ -477,20 +477,29 @@ end
 	tel := telemetry.NewStore()
 	r := NewRegistry(tel)
 
-	// Control mode: missing control-purpose required field refuses the
-	// driver with all errors.
-	if err := r.Add(context.Background(), config.Driver{Name: "telem", Lua: path}); err == nil {
-		t.Fatal("Add should fail manifest validation in control mode")
-		r.Remove("telem")
+	// Control mode: missing control-purpose required field soft-starts
+	// with a persistent ConfigWarning (upgrade safety — the hard gate
+	// for new/edited configs is POST /api/config).
+	if err := r.Add(context.Background(), config.Driver{Name: "telem", Lua: path}); err != nil {
+		t.Fatalf("Add = %v, want soft-start with warning in control mode", err)
 	}
+	if h := tel.DriverHealth("telem"); h == nil || !strings.Contains(h.ConfigWarning, "capacity_wh") {
+		t.Errorf("ConfigWarning = %+v, want missing capacity_wh surfaced", h)
+	}
+	r.Remove("telem")
+	tel.FlushSamples() // drop the control-mode instance's verb_init metric
 
-	// Telemetry-only: same config loads; no init verb; Send refused;
+	// Telemetry-only: same config validates CLEAN (control-purpose
+	// fields waived) — no warning; no init verb; Send refused;
 	// SendDefault (watchdog path) still works.
 	cfg := config.Driver{Name: "telem", Lua: path, TelemetryOnly: true}
 	if err := r.Add(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
 	defer r.Remove("telem")
+	if h := tel.DriverHealth("telem"); h != nil && h.ConfigWarning != "" {
+		t.Errorf("ConfigWarning = %q, want none in telemetry-only mode", h.ConfigWarning)
+	}
 	if sawMetricValue(tel.FlushSamples(), "telem", "verb_init", 1) {
 		t.Error("telemetry-only driver received init verb")
 	}
@@ -569,18 +578,83 @@ function driver_poll() return 60000 end
 	}
 }
 
-// A driver file without a DRIVER_MANIFEST refuses to load via the
-// registry (missing manifest = load error).
-func TestRegistryRefusesDriverWithoutManifest(t *testing.T) {
+// A driver file WITHOUT a DRIVER_MANIFEST loads with a warning (blixt's
+// legacy rule) — pre-manifest user drivers must survive an upgrade. No
+// validation or defaults apply.
+func TestRegistryLoadsDriverWithoutManifest(t *testing.T) {
 	src := `
+function driver_init(config)
+    host.emit_metric("legacy_init_ran", 1)
+end
+function driver_poll() return 60000 end
+`
+	path := writeTestDriver(t, src)
+	tel := telemetry.NewStore()
+	r := NewRegistry(tel)
+	if err := r.Add(context.Background(), config.Driver{Name: "noman", Lua: path}); err != nil {
+		t.Fatalf("Add = %v, want legacy driver to load without a manifest", err)
+	}
+	defer r.Remove("noman")
+	if !sawAnyMetric(tel.FlushSamples(), "noman", "legacy_init_ran") {
+		t.Error("driver_init never ran for the manifest-less driver")
+	}
+}
+
+// A MALFORMED manifest (typo'd schema) still refuses outright — only a
+// completely absent DRIVER_MANIFEST gets the legacy pass.
+func TestRegistryRefusesMalformedManifest(t *testing.T) {
+	src := `
+DRIVER_MANIFEST = {
+    name = "bad", version = "0.0.0", role = "meter",
+    requires = {
+        { name = "x", purpose = "sometimes", type = "integer" },
+    },
+}
 function driver_init(config) end
 function driver_poll() return 60000 end
 `
 	path := writeTestDriver(t, src)
 	r := NewRegistry(telemetry.NewStore())
-	err := r.Add(context.Background(), config.Driver{Name: "noman", Lua: path})
-	if err == nil || !strings.Contains(err.Error(), "DRIVER_MANIFEST") {
-		t.Fatalf("Add = %v, want missing-manifest error", err)
+	err := r.Add(context.Background(), config.Driver{Name: "bad", Lua: path})
+	if err == nil || !strings.Contains(err.Error(), "purpose") {
+		t.Fatalf("Add = %v, want malformed-manifest (unknown purpose) error", err)
+	}
+}
+
+// Config that violates the manifest on an existing entry starts the
+// driver anyway (soft-landing: an upgrade must not turn into telemetry
+// loss) but surfaces the violation in driver health. The hard gate for
+// new/edited entries lives in POST /api/config.
+func TestRegistryStartsDriverDespiteConfigViolation(t *testing.T) {
+	src := `
+DRIVER_MANIFEST = {
+    name = "soft", version = "0.0.0", role = "meter",
+    requires = {
+        { name = "port", purpose = "always", type = "integer", min = 1, max = 65535 },
+    },
+}
+function driver_init(config)
+    host.emit_metric("soft_init_ran", 1)
+end
+function driver_poll() return 60000 end
+`
+	path := writeTestDriver(t, src)
+	tel := telemetry.NewStore()
+	r := NewRegistry(tel)
+	err := r.Add(context.Background(), config.Driver{
+		Name: "soft", Lua: path,
+		Config: map[string]any{"port": 99999}, // out of bounds
+	})
+	if err != nil {
+		t.Fatalf("Add = %v, want soft-start despite config violation", err)
+	}
+	defer r.Remove("soft")
+	if !sawAnyMetric(tel.FlushSamples(), "soft", "soft_init_ran") {
+		t.Error("driver_init never ran on soft-start")
+	}
+	h := tel.DriverHealth("soft")
+	if h == nil || !strings.Contains(h.ConfigWarning, "violates manifest") {
+		t.Errorf("health ConfigWarning = %+v, want the manifest violation surfaced", h)
 	}
 }
 

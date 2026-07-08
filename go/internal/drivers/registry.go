@@ -3,6 +3,7 @@ package drivers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -171,25 +172,51 @@ func (r *Registry) Add(ctx context.Context, cfg config.Driver) error {
 	// Manifest gate: parse DRIVER_MANIFEST in a sandboxed VM, validate
 	// the operator config against it, and apply option defaults — all
 	// before any capability connection is opened or driver_init runs.
-	// A missing or malformed manifest refuses the driver outright.
+	//
+	// Upgrade-safety semantics (blixt's legacy rule):
+	//   - MALFORMED manifest → refuse. A typo'd manifest is more
+	//     dangerous than no manifest.
+	//   - MISSING manifest (ErrNoManifest) → warn loudly + load anyway,
+	//     skipping validation/defaults. Hand-written user drivers from
+	//     before the manifest contract keep running across an upgrade.
+	//   - Validation errors on an EXISTING config → warn loudly + start
+	//     anyway, surfaced in driver health so the UI shows it. Refusing
+	//     would turn an upgrade into silent telemetry loss; new/edited
+	//     configs are hard-gated at POST /api/config instead.
+	initConfig := cfg.Config
 	man, err := LoadManifest(luaPath)
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrNoManifest):
+		slog.Warn("driver has no DRIVER_MANIFEST — loading without config validation (legacy driver); add a manifest to restore validation + catalog visibility",
+			"name", cfg.Name, "path", luaPath)
+		man = nil
+	case err != nil:
 		r.recordAddFailure(cfg.Name, err.Error())
 		return fmt.Errorf("driver %q: manifest: %w", cfg.Name, err)
 	}
-	if errs := man.ValidateConfig(cfg.Config, cfg.TelemetryOnly); len(errs) > 0 {
-		for _, e := range errs {
-			slog.Error("driver config rejected by manifest",
-				"name", cfg.Name, "driver", man.Name+"@"+man.Version, "err", e)
+	if man != nil {
+		if errs := man.ValidateConfig(cfg.Config, cfg.TelemetryOnly); len(errs) > 0 {
+			for _, e := range errs {
+				slog.Warn("driver config violates manifest — starting anyway (fix the config in Settings → Devices)",
+					"name", cfg.Name, "driver", man.Name+"@"+man.Version, "err", e)
+			}
+			// Persistent health warning (not LastError — a successful
+			// emit would clear that) so /api/drivers + the UI keep
+			// showing the degraded config until it's fixed.
+			if r.tel != nil {
+				r.tel.EnsureDriverHealth(cfg.Name)
+				r.tel.SetDriverConfigWarning(cfg.Name, "config violates manifest: "+strings.Join(errs, "; "))
+			}
+		} else if r.tel != nil {
+			// Clean validation clears any warning from a previous load
+			// (the operator fixed the config → hot reload re-Adds us).
+			r.tel.SetDriverConfigWarning(cfg.Name, "")
 		}
-		r.recordAddFailure(cfg.Name, strings.Join(errs, "; "))
-		return fmt.Errorf("driver %q: config failed manifest validation (%d error(s)): %s",
-			cfg.Name, len(errs), strings.Join(errs, "; "))
+		initConfig = man.ApplyDefaults(cfg.Config)
 	}
-	initConfig := man.ApplyDefaults(cfg.Config)
 
 	env := NewHostEnv(cfg.Name, r.tel)
-	if man.PollIntervalMS > 0 {
+	if man != nil && man.PollIntervalMS > 0 {
 		env.setPollInterval(int32(man.PollIntervalMS))
 	}
 	env.BatteryCapacityWh = cfg.BatteryCapacityWh

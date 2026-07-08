@@ -14,6 +14,8 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -27,6 +29,13 @@ import (
 // failed field, prefixed with the driver name so the UI can route the
 // message to the right card: `driver "sonnen": required field "host" is
 // missing — …`.
+//
+// Grandfathering: entries UNCHANGED from the currently-persisted config
+// (same source + config + telemetry_only) are skipped. A pre-manifest
+// install may carry config the new schemas reject; hard-gating those
+// would block every unrelated settings save after an upgrade. Untouched
+// entries load with a warning instead (Registry.Add); the gate bites
+// the moment the operator actually edits that driver.
 func (s *Server) driverManifestErrors(cfg *config.Config) []string {
 	manifests := s.catalogManifestsByPath()
 	var errs []string
@@ -34,6 +43,9 @@ func (s *Server) driverManifestErrors(cfg *config.Config) []string {
 		d := &cfg.Drivers[i]
 		if d.Disabled {
 			continue // not loaded; don't block the save on a parked driver
+		}
+		if s.driverEntryUnchanged(d) {
+			continue // grandfathered — see the doc comment
 		}
 		man := s.manifestForDriver(d, manifests)
 		if man == nil {
@@ -44,6 +56,43 @@ func (s *Server) driverManifestErrors(cfg *config.Config) []string {
 		}
 	}
 	return errs
+}
+
+// driverEntryUnchanged reports whether the submitted driver entry is
+// identical (source ref/path, config map, telemetry_only) to the one in
+// the currently-persisted config.
+func (s *Server) driverEntryUnchanged(d *config.Driver) bool {
+	if s.deps.Cfg == nil || s.deps.CfgMu == nil {
+		return false
+	}
+	s.deps.CfgMu.RLock()
+	defer s.deps.CfgMu.RUnlock()
+	for i := range s.deps.Cfg.Drivers {
+		cur := &s.deps.Cfg.Drivers[i]
+		if cur.Name != d.Name {
+			continue
+		}
+		return cur.Lua == d.Lua && cur.Driver == d.Driver &&
+			cur.TelemetryOnly == d.TelemetryOnly &&
+			configMapsEquivalent(cur.Config, d.Config)
+	}
+	return false
+}
+
+// configMapsEquivalent compares two driver config maps by JSON value.
+// The persisted map comes from YAML (ints), the submitted one from JSON
+// (float64s) — reflect.DeepEqual would flag every numeric field as
+// changed. json.Marshal sorts map keys, so byte equality is exact.
+func configMapsEquivalent(a, b map[string]any) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	ja, errA := json.Marshal(a)
+	jb, errB := json.Marshal(b)
+	if errA != nil || errB != nil {
+		return false // unmarshalable config → treat as changed (validate)
+	}
+	return bytes.Equal(ja, jb)
 }
 
 // catalogManifestsByPath maps the portable config lua path

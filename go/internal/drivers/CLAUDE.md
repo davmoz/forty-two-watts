@@ -14,7 +14,7 @@ Spawns one goroutine per device driver, running a Lua 5.1 script via `yuin/gophe
 | `HostEnv` | Per-driver context: capabilities, telemetry store, identity (`host.go`). |
 | `MQTTCap` / `ModbusCap` | Capability interfaces implemented by `../mqtt` and `../modbus` (`host.go`). |
 | `MQTTMessage` | Inbound message `{topic, payload}` drained via `PopMessages` (`host.go`). |
-| `Manifest` | Parsed `DRIVER_MANIFEST` table — typed config schema, provides contract, catalog metadata (`manifest.go`). Parsed in a sandboxed VM; missing/malformed = load error. |
+| `Manifest` | Parsed `DRIVER_MANIFEST` table — typed config schema, provides contract, catalog metadata (`manifest.go`). Parsed in a sandboxed VM; malformed = load error, missing (`ErrNoManifest`) = warn + legacy load without validation; config violations soft-start with a persistent health `ConfigWarning` (hard gate = POST /api/config on new/edited entries). |
 | `CatalogEntry` | `Manifest` + path/filename/id (file stem) for one discoverable driver (`catalog.go`). |
 
 ## Public API surface

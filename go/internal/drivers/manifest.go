@@ -12,13 +12,17 @@
 //
 // Parsing happens in a sandboxed throwaway Lua VM: no `host` global, a
 // minimal stdlib (base/table/string/math), an execution deadline, and
-// panic recovery. A missing or malformed manifest is a load error — a
-// typo'd manifest is more dangerous than no manifest, and all bundled
-// drivers carry one.
+// panic recovery. A MALFORMED manifest is a load error — a typo'd
+// manifest is more dangerous than no manifest. A MISSING manifest
+// (ErrNoManifest) is tolerated by the registry with a loud warning so
+// hand-written user drivers from before the manifest contract keep
+// running across an upgrade (blixt's own legacy rule); such drivers get
+// no config validation and don't appear in the catalog.
 package drivers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -28,6 +32,12 @@ import (
 
 	lua "github.com/yuin/gopher-lua"
 )
+
+// ErrNoManifest marks a driver whose top-level defines no
+// DRIVER_MANIFEST table at all. Distinguished from a malformed manifest
+// (any other error) so the registry can warn-and-load legacy drivers
+// while still refusing typo'd ones. Test with errors.Is.
+var ErrNoManifest = errors.New("missing DRIVER_MANIFEST table")
 
 // ManifestField is one entry in a manifest's `requires` / `options`
 // lists. Blixt-exact schema plus the ftw `secret` extension.
@@ -164,7 +174,7 @@ func ParseManifest(src string) (m *Manifest, err error) {
 	tblVal := L.GetGlobal("DRIVER_MANIFEST")
 	tbl, ok := tblVal.(*lua.LTable)
 	if !ok {
-		return nil, fmt.Errorf("missing DRIVER_MANIFEST table (found %s)", tblVal.Type())
+		return nil, fmt.Errorf("%w (found %s)", ErrNoManifest, tblVal.Type())
 	}
 	return parseManifestTable(tbl)
 }

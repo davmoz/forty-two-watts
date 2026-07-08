@@ -7,9 +7,15 @@ deadline) before any driver function runs, validates the operator's
 config against it, and serves it as the driver catalog. The old
 `DRIVER = {…}` block and its regex parser are gone.
 
-A **missing or malformed manifest is a load error** — the driver refuses
-to start with a clear message. A typo'd manifest is more dangerous than
-no manifest.
+A **malformed manifest is a load error** — the driver refuses to start
+with a clear message. A typo'd manifest is more dangerous than no
+manifest. A **missing manifest gets a legacy pass**: the driver loads
+with a loud warning, skips config validation/defaults, and doesn't
+appear in the catalog picker — so hand-written user drivers from before
+the manifest contract survive an upgrade. Config that violates an
+existing driver's manifest also soft-starts (persistent `ConfigWarning`
+in driver health) rather than refusing; the hard gate lives in
+`POST /api/config` for new or edited driver entries.
 
 The contract is the blixt driver standard (Sourceful registry drivers
 run unmodified) plus additive ftw extensions. Reference template:

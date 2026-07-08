@@ -118,6 +118,14 @@ type DriverHealth struct {
 	LastError         string
 	TickCount         uint64
 
+	// ConfigWarning is a persistent, non-fatal manifest-validation
+	// warning set at driver load (soft-start on an existing config that
+	// violates the driver's DRIVER_MANIFEST). Unlike LastError it is NOT
+	// cleared by RecordSuccess — it describes the config on disk, not
+	// the last poll — and only goes away when the driver is reloaded
+	// with a config that validates.
+	ConfigWarning string
+
 	// WatchdogTimeoutOverride, when > 0, replaces the site-wide
 	// timeout in WatchdogScan for this driver only. Drivers with
 	// intrinsically slow polling cadences (Tesla BLE proxy, cloud
@@ -636,6 +644,22 @@ func (s *Store) SetDriverWatchdogTimeout(name string, d time.Duration) {
 		s.health[name] = h
 	}
 	h.WatchdogTimeoutOverride = d
+}
+
+// SetDriverConfigWarning records (or clears, with "") a persistent
+// manifest-validation warning for a driver. Set by the registry on
+// soft-start when an existing config violates the driver's manifest;
+// survives RecordSuccess so the UI keeps showing it until the config
+// is fixed and the driver reloads.
+func (s *Store) SetDriverConfigWarning(name, msg string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, ok := s.health[name]
+	if !ok {
+		h = &DriverHealth{Name: name}
+		s.health[name] = h
+	}
+	h.ConfigWarning = msg
 }
 
 // WatchdogTransition describes a driver whose online state just flipped.

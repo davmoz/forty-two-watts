@@ -130,6 +130,38 @@ func TestPostConfigRejectsOutOfBoundsManifestField(t *testing.T) {
 	}
 }
 
+// Grandfathering: a driver entry IDENTICAL to the currently-persisted
+// config passes the gate even when it violates the manifest (a
+// pre-manifest install must be able to save unrelated settings after an
+// upgrade) — but the moment the entry is edited, the gate bites.
+func TestPostConfigGrandfathersUnchangedInvalidDriver(t *testing.T) {
+	var saved config.Config
+	srv := newManifestConfigServer(t, &saved)
+
+	// Persisted config carries an invalid entry (missing required host).
+	invalid := baseDriverConfig(map[string]any{"max_w": 5000}, false)
+	srv.deps.CfgMu.Lock()
+	*srv.deps.Cfg = invalid
+	srv.deps.CfgMu.Unlock()
+
+	// Resubmitting the identical entry (e.g. saving a price setting)
+	// must NOT 400.
+	if code, body := postConfig(t, srv, invalid); code != 200 {
+		t.Fatalf("unchanged invalid entry: status = %d, body = %v (want grandfathered 200)", code, body)
+	}
+
+	// Editing the entry ends the grace: same missing host + a config
+	// tweak → hard gate.
+	edited := baseDriverConfig(map[string]any{"max_w": 7000}, false)
+	code, body := postConfig(t, srv, edited)
+	if code != 400 {
+		t.Fatalf("edited invalid entry: status = %d, body = %v (want 400)", code, body)
+	}
+	if errStr, _ := body["error"].(string); !strings.Contains(errStr, `required field "host"`) {
+		t.Errorf("error = %q, want missing-host message", errStr)
+	}
+}
+
 func TestPostConfigTelemetryOnlySkipsControlFields(t *testing.T) {
 	var saved config.Config
 	srv := newManifestConfigServer(t, &saved)
