@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const minimalManifest = `
@@ -306,6 +307,85 @@ func TestLoadManifestFromFile(t *testing.T) {
 	}
 	if _, err := LoadManifest(filepath.Join(dir, "missing.lua")); err == nil {
 		t.Error("expected error for missing file")
+	}
+}
+
+// LoadManifest memoizes per (path, mtime, size): repeated loads of an
+// unchanged file must not re-execute a sandboxed VM, while an edited
+// file (new mtime) re-parses and serves the new content.
+func TestLoadManifestCachedUntilFileChanges(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cached.lua")
+	write := func(name string, mtime time.Time) {
+		t.Helper()
+		src := `DRIVER_MANIFEST = { name = "` + name + `", version = "0", role = "meter" }`
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// Force a distinct mtime — sub-second FS resolution would
+		// otherwise make back-to-back writes look identical.
+		if err := os.Chtimes(path, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := time.Now().Add(-time.Hour)
+	write("one", base)
+
+	before := manifestParses.Load()
+	m, err := LoadManifest(path)
+	if err != nil || m.Name != "one" {
+		t.Fatalf("first load = %v, %v", m, err)
+	}
+	if got := manifestParses.Load() - before; got != 1 {
+		t.Fatalf("first load parses = %d, want 1", got)
+	}
+	if _, err := LoadManifest(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := manifestParses.Load() - before; got != 1 {
+		t.Errorf("unchanged file re-parsed (parses = %d, want 1)", got)
+	}
+
+	write("two", base.Add(time.Minute))
+	m, err = LoadManifest(path)
+	if err != nil || m.Name != "two" {
+		t.Fatalf("post-edit load = %v, %v", m, err)
+	}
+	if got := manifestParses.Load() - before; got != 2 {
+		t.Errorf("edited file served from stale cache (parses = %d, want 2)", got)
+	}
+}
+
+// Cached results must be isolated per caller: catalog loading mutates
+// Verification in place, which must not leak into the cached copy.
+func TestLoadCatalogSecondScanServedFromCache(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "drv.lua")
+	if err := os.WriteFile(path, []byte(minimalManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCatalog(dir); err != nil {
+		t.Fatal(err)
+	}
+	before := manifestParses.Load()
+	entries, err := LoadCatalog(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := manifestParses.Load() - before; got != 0 {
+		t.Errorf("second LoadCatalog re-executed %d VMs, want 0", got)
+	}
+	// The catalog normalizes Verification on its copy; the raw cached
+	// manifest stays untouched for non-catalog callers.
+	if entries[0].Verification == nil || entries[0].Verification.Status != "experimental" {
+		t.Fatalf("catalog verification = %+v", entries[0].Verification)
+	}
+	m, err := LoadManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Verification != nil {
+		t.Errorf("catalog normalization leaked into the manifest cache: %+v", m.Verification)
 	}
 }
 

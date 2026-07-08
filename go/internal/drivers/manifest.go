@@ -28,6 +28,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	lua "github.com/yuin/gopher-lua"
@@ -116,17 +118,71 @@ func (m Manifest) SecretKeys() []string {
 	return out
 }
 
+// manifestCache memoizes LoadManifest results keyed by path, validated
+// against (mtime, size) so a hot-edited driver file re-parses on the
+// next load. Parsing spins up a sandboxed Lua VM per file; without the
+// cache every catalog request (UI picker, secret masking, config
+// validation) re-executed a VM per bundled driver.
+var (
+	manifestCacheMu sync.Mutex
+	manifestCache   = map[string]manifestCacheEntry{}
+	// manifestParses counts actual VM executions — a test seam proving
+	// cache hits don't re-parse.
+	manifestParses atomic.Int64
+)
+
+type manifestCacheEntry struct {
+	mtime time.Time
+	size  int64
+	man   *Manifest
+	err   error
+}
+
+// result returns a defensively-copied manifest so callers (catalog
+// normalization mutates Verification) can't corrupt the cached value.
+func (e manifestCacheEntry) result() (*Manifest, error) {
+	if e.man == nil {
+		return nil, e.err
+	}
+	cp := *e.man
+	if cp.Verification != nil {
+		v := *cp.Verification
+		cp.Verification = &v
+	}
+	return &cp, e.err
+}
+
 // LoadManifest reads the .lua file at path and parses its manifest.
+// Results (including parse errors) are cached per (path, mtime, size).
 func LoadManifest(path string) (*Manifest, error) {
+	fi, statErr := os.Stat(path)
+	if statErr != nil {
+		return nil, fmt.Errorf("read %s: %w", path, statErr)
+	}
+	manifestCacheMu.Lock()
+	if e, ok := manifestCache[path]; ok && e.mtime.Equal(fi.ModTime()) && e.size == fi.Size() {
+		manifestCacheMu.Unlock()
+		return e.result()
+	}
+	manifestCacheMu.Unlock()
+
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
+	manifestParses.Add(1)
 	m, err := ParseManifest(string(src))
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", filepath.Base(path), err)
+		err = fmt.Errorf("%s: %w", filepath.Base(path), err)
 	}
-	return m, nil
+	// Keyed on the pre-read stat: if the file changed between Stat and
+	// ReadFile we may cache fresh content under a stale key, which the
+	// next mtime/size check simply misses again — self-healing.
+	manifestCacheMu.Lock()
+	manifestCache[path] = manifestCacheEntry{mtime: fi.ModTime(), size: fi.Size(), man: m, err: err}
+	e := manifestCache[path]
+	manifestCacheMu.Unlock()
+	return e.result()
 }
 
 // ParseManifest executes src in a sandboxed Lua VM and parses the
