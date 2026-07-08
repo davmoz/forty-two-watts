@@ -72,8 +72,13 @@ resolve path is cache-first:
 - **Cache hit** → zero network. An offline Pi with a warm cache boots
   and runs registry drivers indefinitely.
 - **Cache miss** → `GET {base}/{name}/{version}` (raw Lua body, 10 s
-  timeout), written atomically (`.tmp` + rename) so a crashed fetch
-  never leaves a truncated driver behind. Empty bodies are rejected.
+  timeout), validated BEFORE caching — registry drivers are
+  manifest-mandatory, so the body must parse as a driver with a valid
+  `DRIVER_MANIFEST`. Empty, oversized (> 2 MB), or garbage bodies (an
+  HTML error page served with a 200) are refused and nothing is
+  cached; the next resolve retries. Valid bodies are written
+  atomically (unique temp file + rename) so a crashed fetch never
+  leaves a truncated driver behind.
 - **Cache miss + fetch failure** → the driver is *refused* with a
   clear error in the log and in driver health; every other driver
   starts normally. Fix the WAN (or the ref) and restart / touch

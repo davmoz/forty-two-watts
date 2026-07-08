@@ -16,7 +16,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/frahlg/forty-two-watts/go/internal/driverregistry"
+	"github.com/frahlg/forty-two-watts/go/internal/driverref"
 )
 
 // Config is the full application config.
@@ -1275,7 +1275,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("driver %q: `lua` and `driver` are mutually exclusive — set exactly one", d.Name)
 		}
 		if d.Driver != "" {
-			if _, _, err := driverregistry.ParseRef(d.Driver); err != nil {
+			if _, _, err := driverref.Parse(d.Driver); err != nil {
 				return fmt.Errorf("driver %q: %w", d.Name, err)
 			}
 		}
