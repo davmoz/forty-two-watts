@@ -38,8 +38,8 @@ drivers:
       modbus:
         host: 192.168.1.42
 
-driver_registry:              # optional — devnet defaults when absent
-  net: devnet                 # devnet | testnet | mainnet
+driver_registry:              # optional — mainnet defaults when absent
+  net: mainnet                # devnet | testnet | mainnet
   url: ""                     # explicit base URL, beats net
   cache_dir: ""               # default <state dir>/driver-cache
 ```
@@ -58,7 +58,7 @@ Base URL precedence, highest first:
 1. `DRIVER_REGISTRY_URL` environment variable (dev / self-hosted).
 2. `driver_registry.url` (explicit override).
 3. `driver_registry.net` → `https://novacore-{net}.sourceful.dev/device-support/drivers`
-   for `devnet` | `testnet` | `mainnet`. Default net: `devnet`.
+   for `devnet` | `testnet` | `mainnet`. Default net: `mainnet`.
 
 The registry read path is public — no auth token is needed to list or
 fetch drivers.

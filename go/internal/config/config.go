@@ -40,7 +40,7 @@ type Config struct {
 	RemoteAccess  *RemoteAccess      `yaml:"remote_access,omitempty" json:"remote_access,omitempty"`
 
 	// DriverRegistry configures the Sourceful driver-registry client used
-	// to resolve pinned `driver: name@version` refs. Nil = devnet defaults.
+	// to resolve pinned `driver: name@version` refs. Nil = mainnet defaults.
 	DriverRegistry *DriverRegistryConf `yaml:"driver_registry,omitempty" json:"driver_registry,omitempty"`
 }
 
@@ -50,7 +50,7 @@ type Config struct {
 type DriverRegistryConf struct {
 	// Net picks the per-network registry base:
 	// https://novacore-{net}.sourceful.dev/device-support/drivers.
-	// One of "devnet" | "testnet" | "mainnet". Default "devnet".
+	// One of "devnet" | "testnet" | "mainnet". Default "mainnet".
 	Net string `yaml:"net,omitempty" json:"net,omitempty"`
 	// URL is an explicit registry base override — beats Net when set.
 	// The DRIVER_REGISTRY_URL env var beats both (dev/self-hosted).
@@ -62,7 +62,7 @@ type DriverRegistryConf struct {
 
 // DefaultDriverRegistryNet is the registry net used when the
 // driver_registry section is absent or leaves net empty.
-const DefaultDriverRegistryNet = "devnet"
+const DefaultDriverRegistryNet = "mainnet"
 
 // driverRegistryNetURL renders the per-net registry base URL.
 func driverRegistryNetURL(net string) string {
@@ -71,7 +71,7 @@ func driverRegistryNetURL(net string) string {
 
 // DriverRegistryBaseURL resolves the effective registry base URL in
 // priority order: env DRIVER_REGISTRY_URL > driver_registry.url >
-// driver_registry.net (default devnet). Nil-safe on a missing section.
+// driver_registry.net (default mainnet). Nil-safe on a missing section.
 func (c *Config) DriverRegistryBaseURL() string {
 	if env := strings.TrimSpace(os.Getenv("DRIVER_REGISTRY_URL")); env != "" {
 		return env

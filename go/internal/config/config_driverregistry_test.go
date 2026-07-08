@@ -79,17 +79,17 @@ func TestDriverRegistryNetValidation(t *testing.T) {
 }
 
 func TestDriverRegistryBaseURLPrecedence(t *testing.T) {
-	// Nil section → devnet default.
+	// Nil section → mainnet default.
 	var c Config
 	if got, want := c.DriverRegistryBaseURL(),
-		"https://novacore-devnet.sourceful.dev/device-support/drivers"; got != want {
+		"https://novacore-mainnet.sourceful.dev/device-support/drivers"; got != want {
 		t.Errorf("nil section base = %q, want %q", got, want)
 	}
 	// net picks the per-net base.
-	c.DriverRegistry = &DriverRegistryConf{Net: "mainnet"}
+	c.DriverRegistry = &DriverRegistryConf{Net: "devnet"}
 	if got, want := c.DriverRegistryBaseURL(),
-		"https://novacore-mainnet.sourceful.dev/device-support/drivers"; got != want {
-		t.Errorf("mainnet base = %q, want %q", got, want)
+		"https://novacore-devnet.sourceful.dev/device-support/drivers"; got != want {
+		t.Errorf("devnet base = %q, want %q", got, want)
 	}
 	// Explicit url beats net.
 	c.DriverRegistry.URL = "http://registry.local/drivers"
@@ -109,8 +109,8 @@ func TestDriverRegistryNetDefaultApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if c.DriverRegistry == nil || c.DriverRegistry.Net != "devnet" {
-		t.Errorf("driver_registry = %+v, want net devnet default", c.DriverRegistry)
+	if c.DriverRegistry == nil || c.DriverRegistry.Net != "mainnet" {
+		t.Errorf("driver_registry = %+v, want net mainnet default", c.DriverRegistry)
 	}
 }
 

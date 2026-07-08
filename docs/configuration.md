@@ -263,7 +263,7 @@ Configures the Sourceful driver registry used to resolve pinned
 
 ```yaml
 driver_registry:
-  net: devnet        # devnet | testnet | mainnet (default devnet)
+  net: mainnet       # devnet | testnet | mainnet (default mainnet)
   url: ""            # explicit base URL — beats `net` when set
   cache_dir: ""      # default <state dir>/driver-cache
 ```
@@ -275,7 +275,7 @@ driver_registry:
 - `cache_dir` holds fetched drivers as `{name}-{version}.lua`; a warm
   cache keeps registry drivers working fully offline.
 
-The whole section is optional — omitting it uses the devnet defaults.
+The whole section is optional — omitting it uses the mainnet defaults.
 Changing it requires restart (the client is constructed at startup).
 
 ## `price` and `weather`

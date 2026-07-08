@@ -275,7 +275,7 @@ func main() {
 	// name@version` refs cache-first from <state dir>/driver-cache, so
 	// a warm cache keeps registry drivers working fully offline. Base
 	// URL precedence: DRIVER_REGISTRY_URL env > driver_registry.url >
-	// driver_registry.net (default devnet). See docs/driver-registry.md.
+	// driver_registry.net (default mainnet). See docs/driver-registry.md.
 	drvRegCacheDir := cfg.DriverRegistryCacheDir()
 	if drvRegCacheDir == "" {
 		drvRegCacheDir = filepath.Join(filepath.Dir(statePath), "driver-cache")
