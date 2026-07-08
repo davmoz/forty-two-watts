@@ -23,11 +23,11 @@ DRIVER_MANIFEST = {
   requires = {},
   options  = {},
   provides = {
-    live   = { "meter.ac_W",
-               "meter.L1_W", "meter.L2_W", "meter.L3_W",
-               "pv.dc_W",
-               "battery.dc_W", "battery.V", "battery.A",
-               "battery.SoC_nom_fract", "battery.temperature_C" },
+    live   = { "meter.w",
+               "meter.l1_w", "meter.l2_w", "meter.l3_w",
+               "pv.w",
+               "battery.w", "battery.v", "battery.a",
+               "battery.soc", "battery.temp_c" },
     -- No sn: Venus OS exposes no serial over this Modbus map; identity
     -- resolves via ARP MAC or the configured endpoint.
     static = { "make" },
