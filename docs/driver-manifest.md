@@ -81,14 +81,22 @@ load driver → parse DRIVER_MANIFEST (sandboxed VM)
 → validate config vs manifest (fail driver on any error)
 → apply option defaults
 → driver_init(config)                 -- read-only identification
-→ driver_command("init", 0)           -- control-capable drivers only
-→ warmup hold (host.set_warmup_s)     -- commands suppressed, polls run
-→ poll loop: driver_poll() + driver_command("battery", w) on dispatch
+→ poll loop: driver_poll()            -- device stays fully passive
 …
-clean stop → driver_command("deinit", 0)  -- explicit safe revert
+first command dispatch (lazy arming, non-telemetry_only drivers only):
+→ driver_command("init", 0)           -- one-shot control arm
+→ warmup hold (host.set_warmup_s)     -- commands suppressed, polls run
+→ driver_command("battery", w) etc. on every later dispatch
+…
+clean stop → driver_command("deinit", 0)  -- armed drivers only: safe revert
           → driver_default_mode()         -- ftw fallback hook
           → driver_cleanup()
 ```
+
+Arming is deliberately lazy: a driver on a site that never dispatches a
+command (idle mode) never receives the `init` verb — no Remote-Mode
+enable, no device-watchdog arm, no bus writes beyond polls — and,
+having never been armed, never receives `deinit` on stop either.
 
 Missing or false-returning `init`/`deinit` handlers are debug-logged,
 never errors — bundled ftw drivers predate the verbs. ftw keeps its
