@@ -16,7 +16,9 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1103,8 +1105,84 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	// settings tab renders an empty input + "Saved" badge; on POST the
 	// PreserveMaskedSecrets pass restores the real value when the
 	// browser sends back the placeholder (or an empty string).
-	maskDriverConfigSecrets(&masked, s.driverSecretKeys())
+	maskDriverConfigSecrets(&masked, s.driverSecretKeysFor(&masked))
 	writeJSON(w, 200, masked)
+}
+
+// driverConfigSecretKeyRe is the name-heuristic half of the secret
+// mask/restore cycle: any driver config key containing one of these
+// words is treated as sensitive even when no manifest is resolvable
+// (legacy pre-manifest drivers, uncached registry refs) or the manifest
+// forgot the `secret = true` flag (myuplink's rotated refresh_token).
+var driverConfigSecretKeyRe = regexp.MustCompile(`(?i)(password|token|secret|api_key)`)
+
+// driverSecretKeysFor returns the effective secret-key map for the
+// mask/restore cycle: the local catalog (keyed by lua path, see
+// driverSecretKeys) plus manifest keys for any `driver:` registry ref
+// used by the given configs (keyed "driver:<ref>"). Registry refs are
+// resolved cache-only — a GET must never trigger a network fetch; an
+// uncached ref is simply skipped and its secrets fall back to the
+// name heuristic.
+func (s *Server) driverSecretKeysFor(cfgs ...*config.Config) map[string][]string {
+	out := s.driverSecretKeys()
+	if s.deps.DriverRegistry == nil {
+		return out
+	}
+	seen := map[string]bool{}
+	for _, cfg := range cfgs {
+		if cfg == nil {
+			continue
+		}
+		for i := range cfg.Drivers {
+			ref := strings.TrimSpace(cfg.Drivers[i].Driver)
+			if ref == "" || seen[ref] {
+				continue
+			}
+			seen[ref] = true
+			name, version, err := driverregistry.ParseRef(ref)
+			if err != nil {
+				continue
+			}
+			path := s.deps.DriverRegistry.CachePath(name, version)
+			if _, err := os.Stat(path); err != nil {
+				continue // not cached — never hit the network here
+			}
+			man, err := drivers.LoadManifest(path)
+			if err != nil {
+				continue
+			}
+			if keys := man.SecretKeys(); len(keys) > 0 {
+				if out == nil {
+					out = map[string][]string{}
+				}
+				out[registryRefSecretKey(ref)] = keys
+			}
+		}
+	}
+	return out
+}
+
+// registryRefSecretKey namespaces a `driver:` ref in the secret-key map
+// so it can't collide with a lua path ("deye@3.1.1" is not a filename
+// the catalog would produce, but be explicit anyway).
+func registryRefSecretKey(ref string) string {
+	return "driver:" + ref
+}
+
+// manifestSecretKeysForDriver picks the manifest-declared secret keys
+// for one config entry: lua-path drivers through the catalog map,
+// registry-ref drivers through the "driver:<ref>" entries.
+func manifestSecretKeysForDriver(d *config.Driver, secretKeys map[string][]string) []string {
+	if len(secretKeys) == 0 {
+		return nil
+	}
+	if d.Lua != "" {
+		return secretKeys[d.Lua]
+	}
+	if d.Driver != "" {
+		return secretKeys[registryRefSecretKey(strings.TrimSpace(d.Driver))]
+	}
+	return nil
 }
 
 // driverSecretKeys returns a map[lua-path]→[]secret-key built from the
@@ -1112,8 +1190,8 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 // fields marked `secret = true`. Used by handleGetConfig +
 // handlePostConfig to scope which `Driver.Config[*]` keys participate
 // in the mask/restore cycle. On catalog read errors returns nil —
-// handlers then skip the secrets pass entirely (fail-open: they still
-// mask the structured fields).
+// handlers then fall back to the name heuristic alone (fail-open: the
+// structured fields are still masked).
 func (s *Server) driverSecretKeys() map[string][]string {
 	dir := s.deps.DriverDir
 	if dir == "" {
@@ -1142,17 +1220,34 @@ func (s *Server) driverSecretKeys() map[string][]string {
 	return out
 }
 
+// driverSecretKeySet unions the manifest-declared secret keys for one
+// driver entry with the name heuristic applied to the given config map:
+// the manifest is authoritative when resolvable, the heuristic covers
+// manifest-less drivers and undeclared sensitive keys.
+func driverSecretKeySet(d *config.Driver, secretKeys map[string][]string, cfgMap map[string]any) map[string]bool {
+	set := map[string]bool{}
+	for _, k := range manifestSecretKeysForDriver(d, secretKeys) {
+		set[k] = true
+	}
+	for k := range cfgMap {
+		if driverConfigSecretKeyRe.MatchString(k) {
+			set[k] = true
+		}
+	}
+	return set
+}
+
 // maskDriverConfigSecrets walks each driver in `cfg.Drivers` and, for
-// every key listed in the catalog's config_secrets for that driver,
-// replaces a non-empty stored value with maskedPlaceholder. Mirrors
+// every secret key (manifest-declared ∪ name heuristic), replaces a
+// non-empty stored string value with maskedPlaceholder. Mirrors
 // MaskSecrets for fields the config package can't know about (the
 // catalog isn't a config-package dependency on purpose).
-func maskDriverConfigSecrets(cfg *config.Config, secretsByLua map[string][]string) {
-	if cfg == nil || len(secretsByLua) == 0 {
+func maskDriverConfigSecrets(cfg *config.Config, secretKeys map[string][]string) {
+	if cfg == nil {
 		return
 	}
 	for i := range cfg.Drivers {
-		keys := secretsByLua[cfg.Drivers[i].Lua]
+		keys := driverSecretKeySet(&cfg.Drivers[i], secretKeys, cfg.Drivers[i].Config)
 		if len(keys) == 0 || cfg.Drivers[i].Config == nil {
 			continue
 		}
@@ -1163,7 +1258,7 @@ func maskDriverConfigSecrets(cfg *config.Config, secretsByLua map[string][]strin
 		for k, v := range cfg.Drivers[i].Config {
 			cp[k] = v
 		}
-		for _, k := range keys {
+		for k := range keys {
 			if v, ok := cp[k]; ok {
 				if s, ok := v.(string); ok && s != "" {
 					cp[k] = maskedPlaceholder
@@ -1175,19 +1270,16 @@ func maskDriverConfigSecrets(cfg *config.Config, secretsByLua map[string][]strin
 }
 
 // restoreDriverConfigSecrets is the symmetric POST-side step: for each
-// driver, any catalog-declared secret value the UI sent back as the
-// masked placeholder OR as an empty string (with a non-empty existing
-// value) gets restored from `existing`. Without this, blanking the
-// password input in the Settings tab would clobber the saved token.
-func restoreDriverConfigSecrets(incoming, existing *config.Config, secretsByLua map[string][]string) {
-	if incoming == nil || existing == nil || len(secretsByLua) == 0 {
+// driver, any secret value (manifest-declared ∪ name heuristic over the
+// STORED config's keys) the UI sent back as the masked placeholder OR
+// as an empty string (with a non-empty existing value) gets restored
+// from `existing`. Without this, blanking the password input in the
+// Settings tab would clobber the saved token.
+func restoreDriverConfigSecrets(incoming, existing *config.Config, secretKeys map[string][]string) {
+	if incoming == nil || existing == nil {
 		return
 	}
 	for i := range incoming.Drivers {
-		keys := secretsByLua[incoming.Drivers[i].Lua]
-		if len(keys) == 0 {
-			continue
-		}
 		// Match the existing driver by Name (same key PreserveMaskedSecrets uses).
 		var ed *config.Driver
 		for j := range existing.Drivers {
@@ -1199,10 +1291,17 @@ func restoreDriverConfigSecrets(incoming, existing *config.Config, secretsByLua 
 		if ed == nil || ed.Config == nil {
 			continue
 		}
+		// Heuristic keys come from the STORED config — the incoming map
+		// carries placeholders, and only keys that exist server-side can
+		// be restored anyway.
+		keys := driverSecretKeySet(&incoming.Drivers[i], secretKeys, ed.Config)
+		if len(keys) == 0 {
+			continue
+		}
 		if incoming.Drivers[i].Config == nil {
 			incoming.Drivers[i].Config = map[string]any{}
 		}
-		for _, k := range keys {
+		for k := range keys {
 			existingV, hasE := ed.Config[k]
 			if !hasE {
 				continue
@@ -1229,12 +1328,11 @@ func (s *Server) handlePostConfig(w http.ResponseWriter, r *http.Request) {
 	// Preserve secrets the UI sent back as empty (masked) values.
 	s.deps.CfgMu.RLock()
 	newCfg.PreserveMaskedSecrets(s.deps.Cfg)
-	// Restore catalog-declared driver secrets (api_token etc.) the UI
-	// returned as maskedPlaceholder or empty. Same semantics as
-	// PreserveMaskedSecrets but scoped to keys the driver itself
-	// declared via DRIVER.config_secrets — keeps config-package
-	// catalog-agnostic.
-	restoreDriverConfigSecrets(&newCfg, s.deps.Cfg, s.driverSecretKeys())
+	// Restore driver secrets (api_token etc.) the UI returned as
+	// maskedPlaceholder or empty. Same semantics as
+	// PreserveMaskedSecrets but scoped to manifest-declared secret keys
+	// plus the name heuristic — keeps config-package catalog-agnostic.
+	restoreDriverConfigSecrets(&newCfg, s.deps.Cfg, s.driverSecretKeysFor(&newCfg))
 	s.deps.CfgMu.RUnlock()
 
 	// EV charger password lives in state.db instead of config.yaml. Empty

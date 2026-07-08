@@ -137,7 +137,7 @@ func (s *Server) handleDriverTest(w http.ResponseWriter, r *http.Request) {
 		s.deps.CfgMu.RUnlock()
 		wrapped := config.Config{Drivers: []config.Driver{cfg}}
 		wrapped.PreserveMaskedSecrets(&existing)
-		restoreDriverConfigSecrets(&wrapped, &existing, s.driverSecretKeys())
+		restoreDriverConfigSecrets(&wrapped, &existing, s.driverSecretKeysFor(&wrapped))
 		cfg = wrapped.Drivers[0]
 	}
 
