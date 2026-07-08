@@ -59,8 +59,10 @@ func (s *Server) driverManifestErrors(cfg *config.Config) []string {
 }
 
 // driverEntryUnchanged reports whether the submitted driver entry is
-// identical (source ref/path, config map, telemetry_only) to the one in
-// the currently-persisted config.
+// identical (source ref/path, config map, telemetry_only, disabled) to
+// the one in the currently-persisted config. Disabled matters: a
+// re-enabled driver is about to load, so its config must face the gate
+// even when nothing else was edited.
 func (s *Server) driverEntryUnchanged(d *config.Driver) bool {
 	if s.deps.Cfg == nil || s.deps.CfgMu == nil {
 		return false
@@ -74,6 +76,7 @@ func (s *Server) driverEntryUnchanged(d *config.Driver) bool {
 		}
 		return cur.Lua == d.Lua && cur.Driver == d.Driver &&
 			cur.TelemetryOnly == d.TelemetryOnly &&
+			cur.Disabled == d.Disabled &&
 			configMapsEquivalent(cur.Config, d.Config)
 	}
 	return false

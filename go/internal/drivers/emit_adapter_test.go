@@ -415,43 +415,96 @@ func (m *compatModbus) WriteSingle(addr, value uint16) error     { m.singleWrite
 func (m *compatModbus) WriteMulti(addr uint16, v []uint16) error { m.multiWrites++; return nil }
 func (m *compatModbus) Close() error                             { return nil }
 
-// Registry lifecycle: control-capable drivers get the "init" verb once
-// after driver_init and the "deinit" verb before driver_default_mode on
-// clean stop. Telemetry-only drivers get neither, and Send refuses them.
-func TestRegistryLifecycleVerbs(t *testing.T) {
-	src := `
+// lifecycleVerbsDriver records every command verb with its arrival
+// order (verb_<action> = position in the seen list) so tests can assert
+// both presence and ordering of init/deinit relative to real commands.
+const lifecycleVerbsDriver = `
 DRIVER_MANIFEST = { name = "verbs", version = "0.0.0", role = "battery" }
 seen = {}
 function driver_init(config) end
 function driver_poll() return 60000 end
 function driver_command(action, w, cmd)
     seen[#seen+1] = action
-    host.emit_metric("verb_" .. tostring(action), w + 1)
+    host.emit_metric("verb_" .. tostring(action), #seen)
     return true
 end
 function driver_default_mode()
-    host.emit_metric("default_mode_after_deinit", #seen)
+    host.emit_metric("default_mode_verbs_seen", #seen)
 end
 `
-	path := writeTestDriver(t, src)
+
+// Registry lifecycle: control arming is LAZY. Add never sends the
+// "init" verb; the first real command dispatch arms the driver (init
+// verb, then the command), and clean stop sends "deinit" before
+// driver_default_mode only because the driver was armed.
+func TestRegistryLifecycleVerbs(t *testing.T) {
+	path := writeTestDriver(t, lifecycleVerbsDriver)
 	tel := telemetry.NewStore()
 	r := NewRegistry(tel)
 	cfg := config.Driver{Name: "verbs", Lua: path, BatteryCapacityWh: 5000}
 	if err := r.Add(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
+	if sawAnyMetric(tel.FlushSamples(), "verbs", "verb_init") {
+		t.Error("init verb dispatched at Add — arming must wait for the first command")
+	}
+	payload, _ := json.Marshal(map[string]any{"action": "battery", "power_w": 100})
+	if err := r.Send(context.Background(), "verbs", payload); err != nil {
+		t.Fatalf("Send = %v", err)
+	}
 	samples := tel.FlushSamples()
 	if !sawMetricValue(samples, "verbs", "verb_init", 1) {
-		t.Error("init verb not dispatched after driver_init")
+		t.Error("init verb not dispatched before the first command")
+	}
+	if !sawMetricValue(samples, "verbs", "verb_battery", 2) {
+		t.Error("battery command not dispatched after the arming init verb")
+	}
+	// Second Send must NOT re-arm.
+	if err := r.Send(context.Background(), "verbs", payload); err != nil {
+		t.Fatalf("second Send = %v", err)
+	}
+	if sawAnyMetric(tel.FlushSamples(), "verbs", "verb_init") {
+		t.Error("init verb dispatched twice")
 	}
 	r.Remove("verbs")
 	samples = tel.FlushSamples()
-	if !sawMetricValue(samples, "verbs", "verb_deinit", 1) {
-		t.Error("deinit verb not dispatched on clean stop")
+	if !sawMetricValue(samples, "verbs", "verb_deinit", 4) {
+		t.Error("deinit verb not dispatched on clean stop of an armed driver")
 	}
-	// default_mode ran AFTER deinit — it saw both verbs recorded.
-	if !sawMetricValue(samples, "verbs", "default_mode_after_deinit", 2) {
+	// default_mode ran AFTER deinit — it saw all four verbs recorded.
+	if !sawMetricValue(samples, "verbs", "default_mode_verbs_seen", 4) {
 		t.Error("driver_default_mode did not run after the deinit verb")
+	}
+}
+
+// C1 safety property: a control-capable driver on a site that never
+// dispatches a command (idle mode) must NEVER receive the init verb —
+// no Remote-Mode enable, no device-watchdog arm — and consequently no
+// deinit on stop. Polls and the watchdog SendDefault path stay verb-free.
+func TestRegistryIdleDriverNeverArmed(t *testing.T) {
+	path := writeTestDriver(t, lifecycleVerbsDriver)
+	tel := telemetry.NewStore()
+	r := NewRegistry(tel)
+	cfg := config.Driver{Name: "verbs", Lua: path, BatteryCapacityWh: 5000}
+	if err := r.Add(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	// Watchdog safety path must not arm either.
+	if err := r.SendDefault(context.Background(), "verbs"); err != nil {
+		t.Fatalf("SendDefault = %v", err)
+	}
+	r.Remove("verbs")
+	samples := tel.FlushSamples()
+	if sawAnyMetric(samples, "verbs", "verb_init") {
+		t.Error("idle driver received the init verb — control was armed without any command dispatch")
+	}
+	if sawAnyMetric(samples, "verbs", "verb_deinit") {
+		t.Error("unarmed driver received the deinit verb on stop")
+	}
+	// driver_default_mode still ran (watchdog + clean-stop hook) and saw
+	// zero command verbs.
+	if !sawMetricValue(samples, "verbs", "default_mode_verbs_seen", 0) {
+		t.Error("driver_default_mode did not run verb-free for the idle driver")
 	}
 }
 
@@ -487,7 +540,7 @@ end
 		t.Errorf("ConfigWarning = %+v, want missing capacity_wh surfaced", h)
 	}
 	r.Remove("telem")
-	tel.FlushSamples() // drop the control-mode instance's verb_init metric
+	tel.FlushSamples() // drop any metrics from the control-mode instance
 
 	// Telemetry-only: same config validates CLEAN (control-purpose
 	// fields waived) — no warning; no init verb; Send refused;
@@ -517,7 +570,9 @@ end
 }
 
 // host.set_warmup_s suppresses command dispatch (not polls) for n
-// seconds after the init verb.
+// seconds after the lazy arming init verb: the first Send arms the
+// driver, and both it and every later command inside the hold are
+// refused with the warming-up error.
 func TestRegistryWarmupSuppressesCommands(t *testing.T) {
 	src := `
 DRIVER_MANIFEST = { name = "warm", version = "0.0.0", role = "battery" }
@@ -531,7 +586,10 @@ function driver_poll()
     host.emit_metric("polls", polls)
     return 20
 end
-function driver_command(action, w, cmd) return true end
+function driver_command(action, w, cmd)
+    host.emit_metric("verb_" .. tostring(action), 1)
+    return true
+end
 `
 	path := writeTestDriver(t, src)
 	tel := telemetry.NewStore()
@@ -542,9 +600,23 @@ function driver_command(action, w, cmd) return true end
 	}
 	defer r.Remove("warm")
 	payload, _ := json.Marshal(map[string]any{"action": "battery", "power_w": 100})
+	// First Send arms (init verb dispatched) but the triggering command
+	// itself is held back by the warmup the driver requested.
 	err := r.Send(context.Background(), "warm", payload)
 	if err == nil || !strings.Contains(err.Error(), "warming up") {
-		t.Errorf("Send during warmup = %v, want warming-up refusal", err)
+		t.Errorf("first Send during warmup = %v, want warming-up refusal", err)
+	}
+	samples := tel.FlushSamples()
+	if !sawAnyMetric(samples, "warm", "verb_init") {
+		t.Error("first Send did not arm the driver with the init verb")
+	}
+	if sawAnyMetric(samples, "warm", "verb_battery") {
+		t.Error("battery command executed inside the warmup hold")
+	}
+	// Later Sends inside the hold are refused up-front (Send fast path).
+	err = r.Send(context.Background(), "warm", payload)
+	if err == nil || !strings.Contains(err.Error(), "warming up") {
+		t.Errorf("second Send during warmup = %v, want warming-up refusal", err)
 	}
 	// Polls keep running during warmup.
 	waitFor(t, func() bool {
@@ -597,6 +669,30 @@ function driver_poll() return 60000 end
 	defer r.Remove("noman")
 	if !sawAnyMetric(tel.FlushSamples(), "noman", "legacy_init_ran") {
 		t.Error("driver_init never ran for the manifest-less driver")
+	}
+}
+
+// A legacy driver whose TOP-LEVEL code fails in the manifest sandbox
+// (e.g. os.time() — the sandbox has no os table) but runs fine in the
+// full driver VM must still load via the warn-and-load path when it
+// defines no manifest at all.
+func TestRegistryLoadsLegacyDriverWithSandboxHostileTopLevel(t *testing.T) {
+	src := `
+local boot_ts = os.time() -- fails in the manifest sandbox, fine in the driver VM
+function driver_init(config)
+    host.emit_metric("hostile_init_ran", 1)
+end
+function driver_poll() return 60000 end
+`
+	path := writeTestDriver(t, src)
+	tel := telemetry.NewStore()
+	r := NewRegistry(tel)
+	if err := r.Add(context.Background(), config.Driver{Name: "hostile", Lua: path}); err != nil {
+		t.Fatalf("Add = %v, want legacy warn-and-load despite top-level exec error", err)
+	}
+	defer r.Remove("hostile")
+	if !sawAnyMetric(tel.FlushSamples(), "hostile", "hostile_init_ran") {
+		t.Error("driver_init never ran for the sandbox-hostile legacy driver")
 	}
 }
 

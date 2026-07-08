@@ -32,6 +32,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/frahlg/forty-two-watts/go/internal/driverref"
+	"github.com/frahlg/forty-two-watts/go/internal/drivers"
 )
 
 // fetchTimeout bounds every registry round-trip. The registry is a
@@ -44,21 +47,13 @@ const fetchTimeout = 10 * time.Second
 const maxSourceBytes = 2 << 20
 
 // ParseRef splits a pinned driver reference "name@version" into its
-// parts. The "@" is mandatory and both sides must be non-empty — we
-// want explicit pinning, never an implicit "latest". Path-hostile
-// characters are rejected because name/version become a cache file
-// name.
+// parts (whitespace-trimmed; "@" mandatory, both sides non-empty,
+// path-hostile characters rejected). The parser lives in the
+// dependency-free driverref package so the config validator can share
+// it without importing this package (which now imports drivers for
+// manifest validation — config → driverregistry would cycle).
 func ParseRef(ref string) (name, version string, err error) {
-	name, version, ok := strings.Cut(ref, "@")
-	if !ok || name == "" || version == "" {
-		return "", "", fmt.Errorf("driver ref %q must be 'name@version' (e.g. 'deye@3.1.1')", ref)
-	}
-	for _, part := range []string{name, version} {
-		if strings.ContainsAny(part, `/\`) || strings.Contains(part, "..") {
-			return "", "", fmt.Errorf("driver ref %q contains path characters", ref)
-		}
-	}
-	return name, version, nil
+	return driverref.Parse(ref)
 }
 
 // RegistryDriver is one entry in the registry index (GET {base}).
@@ -148,15 +143,38 @@ func (c *Client) Resolve(ctx context.Context, ref string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Validate BEFORE caching: registry drivers are manifest-mandatory,
+	// so an HTML error page, captive-portal splash, or truncated body
+	// served with a 200 must never land in the cache — a cache hit is
+	// trusted forever and never re-validated.
+	if _, err := drivers.ParseManifest(string(body)); err != nil {
+		return "", fmt.Errorf("registry driver %s@%s failed validation (not cached): %w", name, version, err)
+	}
 	if err := os.MkdirAll(c.CacheDir, 0o755); err != nil {
 		return "", fmt.Errorf("create driver cache dir %s: %w", c.CacheDir, err)
 	}
-	tmp := cachePath + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o644); err != nil {
-		return "", fmt.Errorf("write %s: %w", tmp, err)
+	// Unique temp file per fetch so concurrent Resolves of the same ref
+	// can't interleave writes into one .tmp; each renames its own
+	// complete copy into place.
+	tmp, err := os.CreateTemp(c.CacheDir, name+"-"+version+".*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("create temp in %s: %w", c.CacheDir, err)
 	}
-	if err := os.Rename(tmp, cachePath); err != nil {
-		return "", fmt.Errorf("rename %s -> %s: %w", tmp, cachePath, err)
+	// CreateTemp defaults to 0600; keep the cache world-readable like
+	// the bundled drivers.
+	_ = tmp.Chmod(0o644)
+	if _, err := tmp.Write(body); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return "", fmt.Errorf("write %s: %w", tmp.Name(), err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return "", fmt.Errorf("close %s: %w", tmp.Name(), err)
+	}
+	if err := os.Rename(tmp.Name(), cachePath); err != nil {
+		os.Remove(tmp.Name())
+		return "", fmt.Errorf("rename %s -> %s: %w", tmp.Name(), cachePath, err)
 	}
 	slog.Info("driver registry: fetched", "ref", ref, "path", cachePath, "bytes", len(body))
 	return cachePath, nil
@@ -228,12 +246,18 @@ func (c *Client) get(ctx context.Context, path string) ([]byte, error) {
 		return nil, fmt.Errorf("registry fetch %s: %w", u, err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSourceBytes))
+	// Read one byte past the cap so an oversized body is DETECTED, not
+	// silently truncated — a truncated driver source must never be
+	// mistaken for a complete one.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSourceBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("registry read %s: %w", u, err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("registry fetch %s: status %d: %s", u, resp.StatusCode, truncate(body, 200))
+	}
+	if len(body) > maxSourceBytes {
+		return nil, fmt.Errorf("registry fetch %s: body exceeds %d-byte limit", u, maxSourceBytes)
 	}
 	return body, nil
 }

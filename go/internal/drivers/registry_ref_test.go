@@ -91,6 +91,126 @@ func TestAddRefusedOnResolveFailure(t *testing.T) {
 	}
 }
 
+// M1: EVERY Add refusal must land in driver health so /api/drivers and
+// /api/status show why the driver is absent. Exercises the resolve-fail,
+// missing-source, load-fail, capability-fail, and driver_init-fail
+// returns.
+func TestAddFailuresRecordedInDriverHealth(t *testing.T) {
+	lastError := func(tel *telemetry.Store, name string) string {
+		t.Helper()
+		h := tel.DriverHealth(name)
+		if h == nil {
+			t.Fatalf("no health record for %q — Add failure not surfaced", name)
+		}
+		return h.LastError
+	}
+
+	t.Run("resolve failure", func(t *testing.T) {
+		tel := telemetry.NewStore()
+		reg := NewRegistry(tel)
+		reg.ResolveDriverRef = func(ref string) (string, error) {
+			return "", errors.New("cache miss + fetch failed")
+		}
+		if err := reg.Add(context.Background(), config.Driver{Name: "d", Driver: "deye@1.0.0"}); err == nil {
+			t.Fatal("want error")
+		}
+		if got := lastError(tel, "d"); !strings.Contains(got, "cache miss") {
+			t.Errorf("LastError = %q, want resolve failure surfaced", got)
+		}
+	})
+
+	t.Run("missing source", func(t *testing.T) {
+		tel := telemetry.NewStore()
+		reg := NewRegistry(tel)
+		if err := reg.Add(context.Background(), config.Driver{Name: "d"}); err == nil {
+			t.Fatal("want error")
+		}
+		if got := lastError(tel, "d"); !strings.Contains(got, "must specify") {
+			t.Errorf("LastError = %q, want missing-source error", got)
+		}
+	})
+
+	t.Run("lua load failure", func(t *testing.T) {
+		tel := telemetry.NewStore()
+		reg := NewRegistry(tel)
+		path := filepath.Join(t.TempDir(), "broken.lua")
+		if err := os.WriteFile(path, []byte("function driver_init( -- syntax error"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := reg.Add(context.Background(), config.Driver{Name: "d", Lua: path}); err == nil {
+			t.Fatal("want error")
+		}
+		if got := lastError(tel, "d"); !strings.Contains(got, "load lua") {
+			t.Errorf("LastError = %q, want lua load error", got)
+		}
+	})
+
+	t.Run("capability failure", func(t *testing.T) {
+		tel := telemetry.NewStore()
+		reg := NewRegistry(tel)
+		reg.MQTTFactory = func(name string, c *config.MQTTConfig) (MQTTCap, error) {
+			return nil, errors.New("broker unreachable")
+		}
+		path := writeRefTestDriver(t)
+		err := reg.Add(context.Background(), config.Driver{
+			Name: "d", Lua: path,
+			Capabilities: config.Capabilities{MQTT: &config.MQTTConfig{Host: "h", Port: 1883}},
+		})
+		if err == nil {
+			t.Fatal("want error")
+		}
+		if got := lastError(tel, "d"); !strings.Contains(got, "broker unreachable") {
+			t.Errorf("LastError = %q, want capability failure surfaced", got)
+		}
+	})
+
+	t.Run("driver_init failure", func(t *testing.T) {
+		tel := telemetry.NewStore()
+		reg := NewRegistry(tel)
+		path := filepath.Join(t.TempDir(), "initfail.lua")
+		src := `
+DRIVER_MANIFEST = { name = "initfail", version = "0.0.0", role = "meter" }
+function driver_init(config) error("device said no") end
+function driver_poll() end
+`
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := reg.Add(context.Background(), config.Driver{Name: "d", Lua: path}); err == nil {
+			t.Fatal("want error")
+		}
+		if got := lastError(tel, "d"); !strings.Contains(got, "driver_init") {
+			t.Errorf("LastError = %q, want driver_init failure surfaced", got)
+		}
+	})
+}
+
+// L4 support: Has reflects the running set only — a failed Add leaves a
+// health record but must not count as running (the watchdog loops use
+// Has to skip SendDefault for absent drivers).
+func TestRegistryHas(t *testing.T) {
+	reg := NewRegistry(telemetry.NewStore())
+	luaPath := writeRefTestDriver(t)
+	if reg.Has("d") {
+		t.Error("Has before Add = true")
+	}
+	if err := reg.Add(context.Background(), config.Driver{Name: "d", Lua: luaPath}); err != nil {
+		t.Fatal(err)
+	}
+	if !reg.Has("d") {
+		t.Error("Has after Add = false")
+	}
+	reg.Remove("d")
+	if reg.Has("d") {
+		t.Error("Has after Remove = true")
+	}
+	// Failed Add (missing source) → health record exists, Has stays false.
+	_ = reg.Add(context.Background(), config.Driver{Name: "failed"})
+	if reg.Has("failed") {
+		t.Error("Has = true for a driver whose Add failed")
+	}
+}
+
 // A changed (or added/removed) registry ref must restart the driver on
 // hot-reload — sameDriverConfig has to compare the ref exactly like it
 // compares the Lua path.

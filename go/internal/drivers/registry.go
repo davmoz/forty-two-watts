@@ -124,9 +124,16 @@ type runningDriver struct {
 	env    *HostEnv
 	cfg    config.Driver
 	// warmupUntil suppresses command dispatch (Send) until it passes.
-	// Set once in Add after the "init" verb when the driver requested a
-	// settle hold via host.set_warmup_s; guarded by Registry.mu.
+	// Set by the runLoop after the lazy "init" verb when the driver
+	// requested a settle hold via host.set_warmup_s; guarded by
+	// Registry.mu (Send reads it outside the runLoop goroutine).
 	warmupUntil time.Time
+	// armed records that the one-shot "init" control verb has been
+	// dispatched. Arming is LAZY — it happens on the first command-kind
+	// dispatch, never at Add — so a driver on a site that never
+	// dispatches (idle mode) never has device control enabled. Only
+	// touched from the runLoop goroutine.
+	armed bool
 	// Poll loop coordination
 	cmdCh chan driverCmd
 	stop  chan bool
@@ -141,15 +148,27 @@ type driverCmd struct {
 }
 
 // Add spawns a driver. Returns error if the driver config is invalid or
-// the Lua script can't be loaded.
+// the Lua script can't be loaded. Every refusal (resolve failure,
+// missing source, load/capability/driver_init error) is recorded in
+// driver health so /api/drivers and /api/status show WHY the driver is
+// absent, not just that it is.
 func (r *Registry) Add(ctx context.Context, cfg config.Driver) error {
 	r.mu.Lock()
 	if _, exists := r.rec[cfg.Name]; exists {
 		r.mu.Unlock()
+		// Not recorded: the RUNNING instance's health must not be
+		// clobbered by a duplicate-add attempt.
 		return fmt.Errorf("driver %q already registered", cfg.Name)
 	}
 	r.mu.Unlock()
+	if err := r.add(ctx, cfg); err != nil {
+		r.recordAddFailure(cfg.Name, err.Error())
+		return err
+	}
+	return nil
+}
 
+func (r *Registry) add(ctx context.Context, cfg config.Driver) error {
 	// Resolve the Lua source: a pinned registry ref (cfg.Driver) wins,
 	// otherwise cfg.Lua is a local path. config.Validate enforces the
 	// exactly-one-of rule; a resolve failure (cache miss + fetch fail)
@@ -188,10 +207,9 @@ func (r *Registry) Add(ctx context.Context, cfg config.Driver) error {
 	switch {
 	case errors.Is(err, ErrNoManifest):
 		slog.Warn("driver has no DRIVER_MANIFEST — loading without config validation (legacy driver); add a manifest to restore validation + catalog visibility",
-			"name", cfg.Name, "path", luaPath)
+			"name", cfg.Name, "path", luaPath, "reason", err)
 		man = nil
 	case err != nil:
-		r.recordAddFailure(cfg.Name, err.Error())
 		return fmt.Errorf("driver %q: manifest: %w", cfg.Name, err)
 	}
 	if man != nil {
@@ -333,23 +351,11 @@ func (r *Registry) Add(ctx context.Context, cfg config.Driver) error {
 		done:   make(chan struct{}),
 	}
 
-	// Control-arm verb: control-capable drivers get a one-shot
-	// driver_command("init", 0) after driver_init (blixt contract —
-	// Remote-Mode enable, device watchdog arm, etc. live there, keeping
-	// driver_init read-only). Drivers without an init handler return
-	// false / nothing: debug-log only, never an error. The runLoop
-	// hasn't started yet, so calling the runtime directly is safe.
-	if !cfg.TelemetryOnly {
-		initVerb, _ := json.Marshal(map[string]any{"action": "init", "power_w": 0})
-		if err := drv.Command(ctx, initVerb); err != nil {
-			slog.Debug("driver init verb not handled", "name", cfg.Name, "err", err)
-		}
-		if w := env.Warmup(); w > 0 {
-			rd.warmupUntil = time.Now().Add(w)
-			slog.Info("driver warmup hold — command dispatch suppressed",
-				"name", cfg.Name, "warmup", w)
-		}
-	}
+	// NOTE: the control-arm "init" verb is NOT sent here. Arming is
+	// deferred to the first real command dispatch (see dispatchCommand)
+	// so a driver on an idle-mode site stays telemetry-passive — no
+	// Remote-Mode enable, no device-watchdog arm, no bus writes beyond
+	// polls — until the host actually intends to command it.
 
 	r.mu.Lock()
 	r.rec[cfg.Name] = rd
@@ -382,10 +388,12 @@ func (r *Registry) runLoop(rd *runningDriver) {
 			if !skipDefault {
 				// Explicit safe-revert verb first (blixt contract:
 				// zero setpoint, disable remote mode), then the ftw
-				// default-mode hook. Telemetry-only drivers never see
-				// command verbs; a missing deinit handler is debug
-				// noise, not an error.
-				if !rd.cfg.TelemetryOnly {
+				// default-mode hook. Only armed drivers get deinit —
+				// a driver that never received the init verb has
+				// nothing to revert, and sending deinit would itself
+				// be a control write on an otherwise passive device.
+				// A missing deinit handler is debug noise, not an error.
+				if rd.armed {
 					deinitVerb, _ := json.Marshal(map[string]any{"action": "deinit", "power_w": 0})
 					if err := rd.driver.Command(ctx, deinitVerb); err != nil {
 						slog.Debug("driver deinit verb not handled", "name", rd.cfg.Name, "err", err)
@@ -421,7 +429,7 @@ func (r *Registry) runLoop(rd *runningDriver) {
 			}
 			switch cmd.kind {
 			case "command":
-				err = rd.driver.Command(cmdCtx, cmd.payload)
+				err = r.dispatchCommand(rd, cmdCtx, cmd.payload)
 			case "default":
 				err = rd.driver.DefaultMode(cmdCtx)
 			}
@@ -448,6 +456,45 @@ func (r *Registry) runLoop(rd *runningDriver) {
 			timer.Reset(interval)
 		}
 	}
+}
+
+// dispatchCommand executes one command-kind dispatch on the runLoop
+// goroutine, lazily arming the driver first. The one-shot "init" verb
+// (blixt contract — Remote-Mode enable, device watchdog arm, etc.,
+// keeping driver_init read-only) fires before the FIRST real command
+// ever reaches the driver; until then the device stays fully passive.
+// Drivers without an init handler return false / nothing: debug-log
+// only, never an error. A driver that requests a settle hold via
+// host.set_warmup_s gets warmupUntil stamped at arm time, and every
+// command inside the hold — including the one that triggered arming —
+// is refused with the warming-up error while polls keep running.
+func (r *Registry) dispatchCommand(rd *runningDriver, ctx context.Context, payload []byte) error {
+	if !rd.armed {
+		initVerb, _ := json.Marshal(map[string]any{"action": "init", "power_w": 0})
+		if err := rd.driver.Command(ctx, initVerb); err != nil {
+			slog.Debug("driver init verb not handled", "name", rd.cfg.Name, "err", err)
+		}
+		rd.armed = true
+		if w := rd.env.Warmup(); w > 0 {
+			r.mu.Lock()
+			rd.warmupUntil = time.Now().Add(w)
+			r.mu.Unlock()
+			slog.Info("driver control armed — warmup hold, command dispatch suppressed",
+				"name", rd.cfg.Name, "warmup", w)
+		} else {
+			slog.Info("driver control armed on first command", "name", rd.cfg.Name)
+		}
+	}
+	// Re-check the hold here (not only in Send): commands already queued
+	// on cmdCh when arming set warmupUntil must not slip through.
+	r.mu.Lock()
+	warmupUntil := rd.warmupUntil
+	r.mu.Unlock()
+	if remaining := time.Until(warmupUntil); remaining > 0 {
+		return fmt.Errorf("driver %q warming up: command dispatch suppressed for another %s",
+			rd.cfg.Name, remaining.Round(time.Second))
+	}
+	return rd.driver.Command(ctx, payload)
 }
 
 // Remove stops and cleans up a driver. Idempotent. Also wipes the
@@ -482,9 +529,11 @@ func (r *Registry) remove(name string, skipDefault bool) {
 }
 
 // Send dispatches a command JSON blob to a specific driver. Blocks until the
-// driver's runLoop processes it or ctx expires. Telemetry-only drivers
-// and drivers inside their post-init warmup hold refuse commands with a
-// clear error (SendDefault — the watchdog safety path — is unaffected).
+// driver's runLoop processes it or ctx expires. The first Send arms the
+// driver (one-shot "init" verb — see dispatchCommand); telemetry-only
+// drivers and drivers inside their post-arm warmup hold refuse commands
+// with a clear error (SendDefault — the watchdog safety path — is
+// unaffected and never arms).
 func (r *Registry) Send(ctx context.Context, name string, payload []byte) error {
 	r.mu.Lock()
 	rd, ok := r.rec[name]
@@ -565,6 +614,17 @@ func (r *Registry) Names() []string {
 		out = append(out, n)
 	}
 	return out
+}
+
+// Has reports whether a driver with this name is currently running.
+// The watchdog loops use it to skip SendDefault for drivers that have
+// a health record (e.g. a recorded Add failure) but no runLoop —
+// otherwise every dispatch tick logs a spurious "not found" error.
+func (r *Registry) Has(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.rec[name]
+	return ok
 }
 
 // ShutdownAll stops every driver. Blocks until all poll loops exit.

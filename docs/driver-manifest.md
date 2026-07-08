@@ -44,6 +44,7 @@ fine without them):
 | `connection_defaults` | table | Prefill for the connection form (e.g. `{ port = 502, unit_id = 1 }`). |
 | `verification` | table | `{ status, verified_by = {…}, verified_at, notes }`. `status` normalizes to `experimental` \| `beta` \| `production` in the catalog. |
 | `tested_models` | string list | Hardware the driver has been run against. |
+| `http_hosts` | string list | Fixed outbound HTTP hosts a cloud driver talks to (e.g. `{ "api.myuplink.com" }`). The UI seeds `capabilities.http.allowed_hosts` from it. |
 
 ## `requires` / `options` field schema
 
@@ -51,7 +52,7 @@ fine without them):
 |---|---|---|
 | `name` | yes | The `config:` key this maps to. |
 | `purpose` | yes | `"always"` (validated in every mode) or `"control"` (skipped when the driver has `telemetry_only: true`). |
-| `type` | yes | `"integer"` \| `"double"` \| `"boolean"` \| `"string"`. |
+| `type` | yes | `"integer"` \| `"double"` \| `"boolean"` \| `"string"`. `string` fields also accept numeric config values — YAML leaves unquoted ids (`param_power_id: 10013`) as numbers and Lua coerces number → string natively. |
 | `min` / `max` | numeric types only | Inclusive bounds. |
 | `default` | options | Applied when the field is absent; type-checked at parse. |
 | `help` | encouraged | Hint surfaced in validation errors and UI forms. |
@@ -81,14 +82,22 @@ load driver → parse DRIVER_MANIFEST (sandboxed VM)
 → validate config vs manifest (fail driver on any error)
 → apply option defaults
 → driver_init(config)                 -- read-only identification
-→ driver_command("init", 0)           -- control-capable drivers only
-→ warmup hold (host.set_warmup_s)     -- commands suppressed, polls run
-→ poll loop: driver_poll() + driver_command("battery", w) on dispatch
+→ poll loop: driver_poll()            -- device stays fully passive
 …
-clean stop → driver_command("deinit", 0)  -- explicit safe revert
+first command dispatch (lazy arming, non-telemetry_only drivers only):
+→ driver_command("init", 0)           -- one-shot control arm
+→ warmup hold (host.set_warmup_s)     -- commands suppressed, polls run
+→ driver_command("battery", w) etc. on every later dispatch
+…
+clean stop → driver_command("deinit", 0)  -- armed drivers only: safe revert
           → driver_default_mode()         -- ftw fallback hook
           → driver_cleanup()
 ```
+
+Arming is deliberately lazy: a driver on a site that never dispatches a
+command (idle mode) never receives the `init` verb — no Remote-Mode
+enable, no device-watchdog arm, no bus writes beyond polls — and,
+having never been armed, never receives `deinit` on stop either.
 
 Missing or false-returning `init`/`deinit` handlers are debug-logged,
 never errors — bundled ftw drivers predate the verbs. ftw keeps its

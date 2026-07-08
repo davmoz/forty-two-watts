@@ -19,7 +19,7 @@ Spawns one goroutine per device driver, running a Lua 5.1 script via `yuin/gophe
 
 ## Public API surface
 
-- `NewRegistry(tel)` + `Add / Remove / Reload / Restart / RestartByName / Send / SendDefault / ShutdownAll / Names / Env`. `Add` parses + enforces the manifest (config validation, defaults), sends the `init` command verb to control-capable (non-`telemetry_only`) drivers, and honours `host.set_warmup_s`; clean stop sends `deinit` before `DefaultMode`.
+- `NewRegistry(tel)` + `Add / Remove / Reload / Restart / RestartByName / Send / SendDefault / ShutdownAll / Names / Has / Env`. `Add` parses + enforces the manifest (config validation, defaults) and starts the poll loop with the device fully passive. Control arming is LAZY: the first command-kind `Send` to a non-`telemetry_only` driver dispatches the one-shot `init` verb on the runLoop goroutine, then honours `host.set_warmup_s`; clean stop sends `deinit` before `DefaultMode` only if the driver was armed.
 - `ParseManifest(src) / LoadManifest(path)` + `Manifest.ValidateConfig / ApplyDefaults / SecretKeys`.
 - `NewLuaDriver(path, env)` for Lua.
 - `NewHostEnv(name, tel)` + `WithMQTT / WithModbus / WithHTTP / SetEndpoint / SetMAC`.

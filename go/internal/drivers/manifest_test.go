@@ -1,10 +1,12 @@
 package drivers
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const minimalManifest = `
@@ -196,6 +198,21 @@ DRIVER_MANIFEST = {
 }`, "min/max are only meaningful")
 }
 
+func TestParseManifestHTTPHosts(t *testing.T) {
+	m := mustParse(t, `
+DRIVER_MANIFEST = {
+    name = "cloud", version = "0", role = "heat-pump",
+    http_hosts = { "api.myuplink.com" },
+}`)
+	if len(m.HTTPHosts) != 1 || m.HTTPHosts[0] != "api.myuplink.com" {
+		t.Errorf("HTTPHosts = %v, want [api.myuplink.com]", m.HTTPHosts)
+	}
+	// Absent → nil (omitted from JSON).
+	if m := mustParse(t, minimalManifest); m.HTTPHosts != nil {
+		t.Errorf("HTTPHosts = %v, want nil when undeclared", m.HTTPHosts)
+	}
+}
+
 func TestParseManifestPollIntervalZeroNormalized(t *testing.T) {
 	m := mustParse(t, `DRIVER_MANIFEST = { name = "x", version = "0", role = "meter", poll_interval_ms = 0 }`)
 	if m.PollIntervalMS != 0 {
@@ -226,8 +243,53 @@ function driver_poll() counter = counter + 1 end
 	}
 }
 
-func TestParseManifestSyntaxErrorIsError(t *testing.T) {
-	wantParseErr(t, `DRIVER_MANIFEST = { name = `, "execute driver top-level")
+// A top-level exec failure without any manifest is the legacy-driver
+// signature (pre-manifest drivers may use stdlib the sandbox lacks,
+// e.g. os.time()): ErrNoManifest, carrying the exec error, so the
+// registry warn-and-loads instead of refusing.
+func TestParseManifestTopLevelExecErrorWithoutManifestIsLegacy(t *testing.T) {
+	for _, src := range []string{
+		`DRIVER_MANIFEST = { name = `, // syntax error
+		`local t = os.time()` + "\n" + // sandbox has no os table
+			`function driver_poll() end`,
+	} {
+		_, err := ParseManifest(src)
+		if !errors.Is(err, ErrNoManifest) {
+			t.Errorf("ParseManifest(%q) = %v, want ErrNoManifest for legacy tolerance", src, err)
+		}
+	}
+}
+
+// A manifest defined BEFORE the failing top-level line is honoured —
+// the sandbox got far enough to read the contract.
+func TestParseManifestHonoredDespiteLaterExecError(t *testing.T) {
+	src := minimalManifest + `
+local t = os.time() -- fails: sandbox has no os
+function driver_poll() end
+`
+	m, err := ParseManifest(src)
+	if err != nil {
+		t.Fatalf("ParseManifest = %v, want manifest honoured despite later exec error", err)
+	}
+	if m.Name != "test" {
+		t.Errorf("name = %q", m.Name)
+	}
+}
+
+// A MALFORMED manifest stays fatal even when the top-level also failed
+// to execute — a typo'd manifest is more dangerous than no manifest.
+func TestParseManifestMalformedWithExecErrorStillRefused(t *testing.T) {
+	src := `
+DRIVER_MANIFEST = { name = "x", version = "0", role = "meter", poll_interval_ms = "fast" }
+local t = os.time()
+`
+	_, err := ParseManifest(src)
+	if err == nil || errors.Is(err, ErrNoManifest) {
+		t.Fatalf("ParseManifest = %v, want fatal malformed-manifest error", err)
+	}
+	if !strings.Contains(err.Error(), "poll_interval_ms") {
+		t.Errorf("error = %v, want the schema violation surfaced", err)
+	}
 }
 
 func TestLoadManifestFromFile(t *testing.T) {
@@ -245,6 +307,85 @@ func TestLoadManifestFromFile(t *testing.T) {
 	}
 	if _, err := LoadManifest(filepath.Join(dir, "missing.lua")); err == nil {
 		t.Error("expected error for missing file")
+	}
+}
+
+// LoadManifest memoizes per (path, mtime, size): repeated loads of an
+// unchanged file must not re-execute a sandboxed VM, while an edited
+// file (new mtime) re-parses and serves the new content.
+func TestLoadManifestCachedUntilFileChanges(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cached.lua")
+	write := func(name string, mtime time.Time) {
+		t.Helper()
+		src := `DRIVER_MANIFEST = { name = "` + name + `", version = "0", role = "meter" }`
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// Force a distinct mtime — sub-second FS resolution would
+		// otherwise make back-to-back writes look identical.
+		if err := os.Chtimes(path, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := time.Now().Add(-time.Hour)
+	write("one", base)
+
+	before := manifestParses.Load()
+	m, err := LoadManifest(path)
+	if err != nil || m.Name != "one" {
+		t.Fatalf("first load = %v, %v", m, err)
+	}
+	if got := manifestParses.Load() - before; got != 1 {
+		t.Fatalf("first load parses = %d, want 1", got)
+	}
+	if _, err := LoadManifest(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := manifestParses.Load() - before; got != 1 {
+		t.Errorf("unchanged file re-parsed (parses = %d, want 1)", got)
+	}
+
+	write("two", base.Add(time.Minute))
+	m, err = LoadManifest(path)
+	if err != nil || m.Name != "two" {
+		t.Fatalf("post-edit load = %v, %v", m, err)
+	}
+	if got := manifestParses.Load() - before; got != 2 {
+		t.Errorf("edited file served from stale cache (parses = %d, want 2)", got)
+	}
+}
+
+// Cached results must be isolated per caller: catalog loading mutates
+// Verification in place, which must not leak into the cached copy.
+func TestLoadCatalogSecondScanServedFromCache(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "drv.lua")
+	if err := os.WriteFile(path, []byte(minimalManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCatalog(dir); err != nil {
+		t.Fatal(err)
+	}
+	before := manifestParses.Load()
+	entries, err := LoadCatalog(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := manifestParses.Load() - before; got != 0 {
+		t.Errorf("second LoadCatalog re-executed %d VMs, want 0", got)
+	}
+	// The catalog normalizes Verification on its copy; the raw cached
+	// manifest stays untouched for non-catalog callers.
+	if entries[0].Verification == nil || entries[0].Verification.Status != "experimental" {
+		t.Fatalf("catalog verification = %+v", entries[0].Verification)
+	}
+	m, err := LoadManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Verification != nil {
+		t.Errorf("catalog normalization leaked into the manifest cache: %+v", m.Verification)
 	}
 }
 
@@ -328,6 +469,29 @@ func TestValidateConfigTypeCoercion(t *testing.T) {
 	errs := m.ValidateConfig(map[string]any{"host": "x", "capacity_wh": 1000.5}, false)
 	if len(errs) != 1 {
 		t.Errorf("fractional integer accepted: %v", errs)
+	}
+}
+
+// YAML unquoted numeric ids (param_power_id: 10013) decode as Go
+// numbers but validate against string fields — Lua coerces number →
+// string natively, and hard-refusing would break configs that have
+// always worked unquoted.
+func TestValidateConfigStringAcceptsNumeric(t *testing.T) {
+	m := mustParse(t, `
+DRIVER_MANIFEST = {
+    name = "s", version = "0", role = "battery",
+    requires = {
+        { name = "param_power_id", purpose = "always", type = "string" },
+    },
+}`)
+	for _, v := range []any{"10013", 10013, int64(10013), float64(10013)} {
+		if errs := m.ValidateConfig(map[string]any{"param_power_id": v}, false); len(errs) != 0 {
+			t.Errorf("param_power_id=%v (%T): unexpected errors %v", v, v, errs)
+		}
+	}
+	// Non-stringy, non-numeric values still refuse.
+	if errs := m.ValidateConfig(map[string]any{"param_power_id": true}, false); len(errs) != 1 {
+		t.Errorf("boolean accepted for string field: %v", errs)
 	}
 }
 

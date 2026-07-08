@@ -275,7 +275,7 @@ func main() {
 	// name@version` refs cache-first from <state dir>/driver-cache, so
 	// a warm cache keeps registry drivers working fully offline. Base
 	// URL precedence: DRIVER_REGISTRY_URL env > driver_registry.url >
-	// driver_registry.net (default devnet). See docs/driver-registry.md.
+	// driver_registry.net (default mainnet). See docs/driver-registry.md.
 	drvRegCacheDir := cfg.DriverRegistryCacheDir()
 	if drvRegCacheDir == "" {
 		drvRegCacheDir = filepath.Join(filepath.Dir(statePath), "driver-cache")
@@ -1986,7 +1986,13 @@ func main() {
 				if !tr.Online {
 					slog.Warn("driver telemetry stale — marking offline + reverting to autonomous",
 						"name", tr.Name, "timeout", watchdogTimeout)
-					sendDriverDefault(ctx, reg, tr.Name, "watchdog")
+					// Health records exist for drivers that failed to Add
+					// (surfaced refusals) — there's no runLoop to revert,
+					// so skip the dispatch. The site-meter-stale loop below
+					// is already scoped to reg.Names().
+					if reg.Has(tr.Name) {
+						sendDriverDefault(ctx, reg, tr.Name, "watchdog")
+					}
 					bus.Publish(events.DriverLost{Driver: tr.Name, At: time.Now()})
 				} else {
 					slog.Info("driver telemetry recovered — back online", "name", tr.Name)

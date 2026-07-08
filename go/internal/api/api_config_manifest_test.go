@@ -162,6 +162,31 @@ func TestPostConfigGrandfathersUnchangedInvalidDriver(t *testing.T) {
 	}
 }
 
+// L3: re-enabling a disabled driver counts as a change — the entry is
+// about to load, so its config must face the gate even when nothing
+// else was edited.
+func TestPostConfigReEnablingDriverEndsGrandfathering(t *testing.T) {
+	var saved config.Config
+	srv := newManifestConfigServer(t, &saved)
+
+	// Persisted config: invalid entry, parked (disabled).
+	parked := baseDriverConfig(map[string]any{"max_w": 5000}, false)
+	parked.Drivers[0].Disabled = true
+	srv.deps.CfgMu.Lock()
+	*srv.deps.Cfg = parked
+	srv.deps.CfgMu.Unlock()
+
+	// Re-enable with the config otherwise untouched → hard gate.
+	reenabled := baseDriverConfig(map[string]any{"max_w": 5000}, false)
+	code, body := postConfig(t, srv, reenabled)
+	if code != 400 {
+		t.Fatalf("re-enabled invalid entry: status = %d, body = %v (want 400)", code, body)
+	}
+	if errStr, _ := body["error"].(string); !strings.Contains(errStr, `required field "host"`) {
+		t.Errorf("error = %q, want missing-host message", errStr)
+	}
+}
+
 func TestPostConfigTelemetryOnlySkipsControlFields(t *testing.T) {
 	var saved config.Config
 	srv := newManifestConfigServer(t, &saved)

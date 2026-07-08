@@ -21,8 +21,10 @@ implements the lifecycle (`driver_init`, `driver_poll`,
 `driver_command`, `driver_default_mode`, `driver_cleanup`), talking to
 hardware through the `host.*` capabilities exposed by
 `go/internal/drivers/lua.go`. Control-capable drivers additionally get
-`driver_command("init", 0)` after init and `("deinit", 0)` on clean
-stop; `telemetry_only: true` in config runs a driver read-only.
+a one-shot `driver_command("init", 0)` lazily armed on the first real
+command dispatch (never at load — an idle site stays passive) and
+`("deinit", 0)` on clean stop if armed; `telemetry_only: true` in
+config runs a driver read-only.
 Drivers are hot-editable on the Pi and need no build step.
 
 **Clamping discipline**: every clamp must protect against a *quantifiable
