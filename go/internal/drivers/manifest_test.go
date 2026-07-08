@@ -1,6 +1,7 @@
 package drivers
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,8 +227,53 @@ function driver_poll() counter = counter + 1 end
 	}
 }
 
-func TestParseManifestSyntaxErrorIsError(t *testing.T) {
-	wantParseErr(t, `DRIVER_MANIFEST = { name = `, "execute driver top-level")
+// A top-level exec failure without any manifest is the legacy-driver
+// signature (pre-manifest drivers may use stdlib the sandbox lacks,
+// e.g. os.time()): ErrNoManifest, carrying the exec error, so the
+// registry warn-and-loads instead of refusing.
+func TestParseManifestTopLevelExecErrorWithoutManifestIsLegacy(t *testing.T) {
+	for _, src := range []string{
+		`DRIVER_MANIFEST = { name = `, // syntax error
+		`local t = os.time()` + "\n" + // sandbox has no os table
+			`function driver_poll() end`,
+	} {
+		_, err := ParseManifest(src)
+		if !errors.Is(err, ErrNoManifest) {
+			t.Errorf("ParseManifest(%q) = %v, want ErrNoManifest for legacy tolerance", src, err)
+		}
+	}
+}
+
+// A manifest defined BEFORE the failing top-level line is honoured —
+// the sandbox got far enough to read the contract.
+func TestParseManifestHonoredDespiteLaterExecError(t *testing.T) {
+	src := minimalManifest + `
+local t = os.time() -- fails: sandbox has no os
+function driver_poll() end
+`
+	m, err := ParseManifest(src)
+	if err != nil {
+		t.Fatalf("ParseManifest = %v, want manifest honoured despite later exec error", err)
+	}
+	if m.Name != "test" {
+		t.Errorf("name = %q", m.Name)
+	}
+}
+
+// A MALFORMED manifest stays fatal even when the top-level also failed
+// to execute — a typo'd manifest is more dangerous than no manifest.
+func TestParseManifestMalformedWithExecErrorStillRefused(t *testing.T) {
+	src := `
+DRIVER_MANIFEST = { name = "x", version = "0", role = "meter", poll_interval_ms = "fast" }
+local t = os.time()
+`
+	_, err := ParseManifest(src)
+	if err == nil || errors.Is(err, ErrNoManifest) {
+		t.Fatalf("ParseManifest = %v, want fatal malformed-manifest error", err)
+	}
+	if !strings.Contains(err.Error(), "poll_interval_ms") {
+		t.Errorf("error = %v, want the schema violation surfaced", err)
+	}
 }
 
 func TestLoadManifestFromFile(t *testing.T) {

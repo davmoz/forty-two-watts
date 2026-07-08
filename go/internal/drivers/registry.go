@@ -195,7 +195,7 @@ func (r *Registry) Add(ctx context.Context, cfg config.Driver) error {
 	switch {
 	case errors.Is(err, ErrNoManifest):
 		slog.Warn("driver has no DRIVER_MANIFEST — loading without config validation (legacy driver); add a manifest to restore validation + catalog visibility",
-			"name", cfg.Name, "path", luaPath)
+			"name", cfg.Name, "path", luaPath, "reason", err)
 		man = nil
 	case err != nil:
 		r.recordAddFailure(cfg.Name, err.Error())

@@ -167,13 +167,20 @@ func ParseManifest(src string) (m *Manifest, err error) {
 	defer cancel()
 	L.SetContext(ctx)
 
-	if doErr := L.DoString(src); doErr != nil {
-		return nil, fmt.Errorf("execute driver top-level: %w", doErr)
-	}
+	// A top-level exec error is NOT fatal by itself: legacy drivers may
+	// run top-level code the sandbox can't (os.time(), host.*, …). What
+	// matters is whether DRIVER_MANIFEST got defined before the failure
+	// — if it did, honour it (schema errors stay fatal); if not, this is
+	// a manifest-less legacy driver (ErrNoManifest carries the exec
+	// error so the registry's warn-and-load log shows why).
+	execErr := L.DoString(src)
 
 	tblVal := L.GetGlobal("DRIVER_MANIFEST")
 	tbl, ok := tblVal.(*lua.LTable)
 	if !ok {
+		if execErr != nil {
+			return nil, fmt.Errorf("%w (driver top-level failed in manifest sandbox: %v)", ErrNoManifest, execErr)
+		}
 		return nil, fmt.Errorf("%w (found %s)", ErrNoManifest, tblVal.Type())
 	}
 	return parseManifestTable(tbl)

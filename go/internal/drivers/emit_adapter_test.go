@@ -672,6 +672,30 @@ function driver_poll() return 60000 end
 	}
 }
 
+// A legacy driver whose TOP-LEVEL code fails in the manifest sandbox
+// (e.g. os.time() — the sandbox has no os table) but runs fine in the
+// full driver VM must still load via the warn-and-load path when it
+// defines no manifest at all.
+func TestRegistryLoadsLegacyDriverWithSandboxHostileTopLevel(t *testing.T) {
+	src := `
+local boot_ts = os.time() -- fails in the manifest sandbox, fine in the driver VM
+function driver_init(config)
+    host.emit_metric("hostile_init_ran", 1)
+end
+function driver_poll() return 60000 end
+`
+	path := writeTestDriver(t, src)
+	tel := telemetry.NewStore()
+	r := NewRegistry(tel)
+	if err := r.Add(context.Background(), config.Driver{Name: "hostile", Lua: path}); err != nil {
+		t.Fatalf("Add = %v, want legacy warn-and-load despite top-level exec error", err)
+	}
+	defer r.Remove("hostile")
+	if !sawAnyMetric(tel.FlushSamples(), "hostile", "hostile_init_ran") {
+		t.Error("driver_init never ran for the sandbox-hostile legacy driver")
+	}
+}
+
 // A MALFORMED manifest (typo'd schema) still refuses outright — only a
 // completely absent DRIVER_MANIFEST gets the legacy pass.
 func TestRegistryRefusesMalformedManifest(t *testing.T) {
