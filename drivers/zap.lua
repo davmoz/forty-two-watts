@@ -70,12 +70,12 @@ DRIVER_MANIFEST = {
       help = "Skip PV aggregation from inverters attached to the Zap (use when PV comes from another driver)." },
   },
   provides = {
-    live   = { "meter.ac_W",
-               "meter.L1_V", "meter.L2_V", "meter.L3_V",
-               "meter.L1_A", "meter.L2_A", "meter.L3_A",
-               "meter.L1_W", "meter.L2_W", "meter.L3_W",
-               "meter.total_import_Wh", "meter.total_export_Wh",
-               "pv.dc_W", "pv.total_generation_Wh" },
+    live   = { "meter.w",
+               "meter.l1_v", "meter.l2_v", "meter.l3_v",
+               "meter.l1_a", "meter.l2_a", "meter.l3_a",
+               "meter.l1_w", "meter.l2_w", "meter.l3_w",
+               "meter.import_wh", "meter.export_wh",
+               "pv.w", "pv.lifetime_wh" },
     static = { "make", "sn" },
   },
 }
