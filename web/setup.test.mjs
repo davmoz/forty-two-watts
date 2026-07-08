@@ -75,6 +75,29 @@ describe("setup wizard EV charger — buildConfig shapes the block per provider"
   });
 });
 
+describe("setup wizard step 5 — manifest host field dedup (review M2)", () => {
+  it("hides the manifest-declared host field so the IP input is the single source of truth", () => {
+    assert.match(JS, /querySelector\('\.mf-field\[data-mf-name="host"\]'\)/,
+      "renderManifestFields must locate the duplicate host field");
+    assert.match(JS, /hostField\.hidden\s*=\s*true/,
+      "the duplicate host field must be hidden");
+  });
+
+  it("saveDriver syncs the CURRENT #drv-ip value into config.host", () => {
+    assert.match(JS, /manifestValues\.host\s*=\s*ip/,
+      "config.host must come from the wizard IP field, so it can't diverge from allowed_hosts");
+  });
+});
+
+describe("setup wizard — manifest http_hosts seeds allowed_hosts (review M3)", () => {
+  it("prefers the manifest's declared cloud hosts over the local IP for HTTP drivers", () => {
+    assert.match(JS, /Array\.isArray\(selectedCatalog\.http_hosts\)/,
+      "must tolerate the http_hosts field being absent");
+    assert.match(JS, /allowed_hosts:\s*httpHosts\.length\s*>\s*0\s*\?\s*httpHosts\s*:\s*\[ip\]/,
+      "http_hosts when present, else the current [ip] behaviour");
+  });
+});
+
 describe("setup wizard — ?step=N deep-link (Job 4)", () => {
   it("reads the step param from the URL on init", () => {
     assert.match(JS, /URLSearchParams\(window\.location\.search\)/,
