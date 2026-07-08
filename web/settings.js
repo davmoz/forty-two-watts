@@ -103,7 +103,14 @@
       body: JSON.stringify(currentConfig),
     })
       .then(function (r) {
-        if (!r.ok) return r.json().then(function (j) { throw new Error(j.error || ("HTTP " + r.status)); });
+        if (!r.ok) return r.json().then(function (j) {
+          var err = new Error(j.error || ("HTTP " + r.status));
+          // Keep the structured 400 payload (e.g. manifest_errors[])
+          // so tab onSaveError hooks don't have to re-split the joined
+          // error string.
+          err.body = j;
+          throw err;
+        });
         return r.json();
       })
       .then(function (res) {
@@ -125,7 +132,7 @@
         // offending fields). The status line still shows regardless.
         var def2 = S.tabs[currentTab];
         if (def2 && typeof def2.onSaveError === "function") {
-          try { def2.onSaveError(e.message, makeCtx()); } catch (e2) { console.error("tab onSaveError:", currentTab, e2); }
+          try { def2.onSaveError(e.message, makeCtx(), e.body); } catch (e2) { console.error("tab onSaveError:", currentTab, e2); }
         }
         setStatus("Save failed: " + e.message, "error");
       });

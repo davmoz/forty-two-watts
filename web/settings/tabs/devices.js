@@ -89,7 +89,10 @@
         unit_id: typeof cd.unit_id === "number" ? cd.unit_id : 1,
       };
     }
-    if (protos.indexOf("http") >= 0) driver.capabilities.http = { allowed_hosts: [] };
+    // Cloud drivers declare their fixed hosts via `http_hosts`; seed the
+    // allowlist so the driver works out of the box instead of relying on
+    // the empty-list allow-any behaviour.
+    if (protos.indexOf("http") >= 0) driver.capabilities.http = { allowed_hosts: manifestHTTPHosts(manifest) };
     if (protos.indexOf("websocket") >= 0) driver.capabilities.websocket = { allowed_hosts: [] };
     if (protos.indexOf("tcp") >= 0) driver.capabilities.tcp = { allowed_hosts: [] };
     // A manifest with no protocols still needs ≥1 capability to pass
@@ -105,6 +108,16 @@
       driver.config.host = typeof cd.host === "string" ? cd.host : "";
     }
     return driver;
+  }
+
+  // manifestHTTPHosts: fixed outbound cloud hosts a manifest declares
+  // via the optional `http_hosts` extension (e.g. ["api.myuplink.com"]).
+  // Tolerates the field being absent or malformed → [] (the operator
+  // can still narrow the allowlist by hand).
+  function manifestHTTPHosts(manifest) {
+    var hosts = manifest && manifest.http_hosts;
+    if (!Array.isArray(hosts)) return [];
+    return hosts.filter(function (h) { return typeof h === "string" && h !== ""; });
   }
 
   function verificationBadge(status) {
@@ -246,12 +259,20 @@
     // onSaveError: map backend manifest-validation messages
     // (`driver "x": field "y" …`) onto the offending fields; anything
     // unmatched lands in the banner above the device list.
-    onSaveError: function (message, ctx) {
+    //
+    // `body` is the parsed 400 payload (settings.js attaches it to the
+    // thrown Error). Prefer its `manifest_errors` array — one intact
+    // message per failed field — over splitting the joined `error`
+    // string on "; ", which mangles help texts that contain "; ".
+    onSaveError: function (message, ctx, body) {
       var config = ctx.config;
       var forms = S._deviceForms || {};
       var banner = ctx.bodyEl.querySelector(".drv-save-banner");
       var unmatched = [];
-      String(message || "").replace(/^validation:\s*/i, "").split("; ").forEach(function (frag) {
+      var msgs = body && Array.isArray(body.manifest_errors)
+        ? body.manifest_errors
+        : String(message || "").replace(/^validation:\s*/i, "").split("; ");
+      msgs.forEach(function (frag) {
         if (!/field "/.test(frag)) return; // non-manifest failure — status line covers it
         var m = /driver "([^"]+)"/.exec(frag);
         var idx = -1;
@@ -272,6 +293,12 @@
       var config = ctx.config;
       var bodyEl = ctx.bodyEl;
       var escHtml = ctx.escHtml;
+      // help must be aliased here too, not just in render(): the async
+      // fill pass (fillManifestSlot → myuplinkSetupHTML) builds HTML with
+      // help() long after render() returned. Without this alias any
+      // config with a MyUplink driver crashed the whole Devices tab with
+      // a ReferenceError.
+      var help = ctx.help;
       S._deviceForms = {};
       S.manifestByRef = S.manifestByRef || {};
 
@@ -418,7 +445,9 @@
 
       // Connect button + connected badge + manual-URL fallback, rendered
       // below the manifest fields. refresh_token is written server-side by
-      // the consent flow (a masked non-empty value round-trips = connected).
+      // the consent flow and masked on GET /api/config by the server-side
+      // name heuristic (any key matching password|token|secret|api_key),
+      // so a masked non-empty value round-tripping here = connected.
       function myuplinkConnectHTML(d, idx) {
         var acfg = d.config || {};
         var connected = typeof acfg.refresh_token === 'string' && acfg.refresh_token !== '';
@@ -699,7 +728,10 @@
       }
 
       // ---- Driver catalog picker (bundled) ----
-      ownerFetch("/api/drivers/catalog").then(function (r) { return r.json(); }).then(function (data) {
+      ownerFetch("/api/drivers/catalog").then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      }).then(function (data) {
         var entries = (data && data.entries) || [];
         var byLua = {};
         entries.forEach(function (e) { if (e && e.path) byLua[e.path] = e; });
@@ -726,6 +758,16 @@
           if (notes) opt.title = notes;
           sel.appendChild(opt);
         });
+      }).catch(function (e) {
+        // Catalog unreachable (offline Pi, server hiccup): the tab must
+        // still render every configured driver. fillAllSlots with no
+        // catalog resolves lua drivers to a null manifest → raw
+        // key/value fallback editor; the battery-capacity reveal pass
+        // runs too. The picker gets a real message instead of a stuck
+        // "Loading catalog…".
+        fillAllSlots();
+        var sel = document.getElementById("driver-catalog-picker");
+        if (sel) sel.innerHTML = "<option value=''>(catalog unavailable — " + escHtml(e.message) + ")</option>";
       });
 
       fetchRefManifests();
