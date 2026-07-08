@@ -92,6 +92,11 @@ type Manifest struct {
 	ConnectionDefaults map[string]any        `json:"connection_defaults,omitempty"`
 	Verification       *ManifestVerification `json:"verification,omitempty"`
 	TestedModels       []string              `json:"tested_models,omitempty"`
+	// HTTPHosts lists the fixed outbound HTTP hosts a cloud driver
+	// talks to (e.g. {"api.myuplink.com"}). The UI seeds
+	// capabilities.http.allowed_hosts from it so the operator doesn't
+	// have to know the vendor's API hostname.
+	HTTPHosts []string `json:"http_hosts,omitempty"`
 }
 
 // SecretKeys returns the names of all requires/options fields marked
@@ -224,6 +229,7 @@ func parseManifestTable(tbl *lua.LTable) (*Manifest, error) {
 	m.Manufacturer = optionalString(tbl, "manufacturer")
 	m.Protocols = optionalStringList(tbl, "protocols")
 	m.TestedModels = optionalStringList(tbl, "tested_models")
+	m.HTTPHosts = optionalStringList(tbl, "http_hosts")
 	if cd, ok := tbl.RawGetString("connection_defaults").(*lua.LTable); ok {
 		if obj, ok := luaToGo(cd).(map[string]any); ok {
 			m.ConnectionDefaults = obj
@@ -449,9 +455,17 @@ func checkFieldValue(f ManifestField, v any, errs *[]string) {
 		}
 		return
 	case "string":
-		if _, ok := v.(string); !ok {
-			*errs = append(*errs, fmt.Sprintf("field %q must be a string (got %v)", f.Name, v))
+		if _, ok := v.(string); ok {
+			return
 		}
+		// Leniency: YAML leaves unquoted numeric ids (param_power_id:
+		// 10013) as numbers, and the driver reads them through Lua where
+		// number→string coercion is native. Rejecting would force every
+		// operator to quote ids that have always worked unquoted.
+		if _, ok := asFloat(v); ok {
+			return
+		}
+		*errs = append(*errs, fmt.Sprintf("field %q must be a string (got %v)", f.Name, v))
 		return
 	case "integer":
 		fv, ok := asFloat(v)

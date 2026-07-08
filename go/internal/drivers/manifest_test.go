@@ -197,6 +197,21 @@ DRIVER_MANIFEST = {
 }`, "min/max are only meaningful")
 }
 
+func TestParseManifestHTTPHosts(t *testing.T) {
+	m := mustParse(t, `
+DRIVER_MANIFEST = {
+    name = "cloud", version = "0", role = "heat-pump",
+    http_hosts = { "api.myuplink.com" },
+}`)
+	if len(m.HTTPHosts) != 1 || m.HTTPHosts[0] != "api.myuplink.com" {
+		t.Errorf("HTTPHosts = %v, want [api.myuplink.com]", m.HTTPHosts)
+	}
+	// Absent → nil (omitted from JSON).
+	if m := mustParse(t, minimalManifest); m.HTTPHosts != nil {
+		t.Errorf("HTTPHosts = %v, want nil when undeclared", m.HTTPHosts)
+	}
+}
+
 func TestParseManifestPollIntervalZeroNormalized(t *testing.T) {
 	m := mustParse(t, `DRIVER_MANIFEST = { name = "x", version = "0", role = "meter", poll_interval_ms = 0 }`)
 	if m.PollIntervalMS != 0 {
@@ -374,6 +389,29 @@ func TestValidateConfigTypeCoercion(t *testing.T) {
 	errs := m.ValidateConfig(map[string]any{"host": "x", "capacity_wh": 1000.5}, false)
 	if len(errs) != 1 {
 		t.Errorf("fractional integer accepted: %v", errs)
+	}
+}
+
+// YAML unquoted numeric ids (param_power_id: 10013) decode as Go
+// numbers but validate against string fields — Lua coerces number →
+// string natively, and hard-refusing would break configs that have
+// always worked unquoted.
+func TestValidateConfigStringAcceptsNumeric(t *testing.T) {
+	m := mustParse(t, `
+DRIVER_MANIFEST = {
+    name = "s", version = "0", role = "battery",
+    requires = {
+        { name = "param_power_id", purpose = "always", type = "string" },
+    },
+}`)
+	for _, v := range []any{"10013", 10013, int64(10013), float64(10013)} {
+		if errs := m.ValidateConfig(map[string]any{"param_power_id": v}, false); len(errs) != 0 {
+			t.Errorf("param_power_id=%v (%T): unexpected errors %v", v, v, errs)
+		}
+	}
+	// Non-stringy, non-numeric values still refuse.
+	if errs := m.ValidateConfig(map[string]any{"param_power_id": true}, false); len(errs) != 1 {
+		t.Errorf("boolean accepted for string field: %v", errs)
 	}
 }
 

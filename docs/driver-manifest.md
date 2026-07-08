@@ -44,6 +44,7 @@ fine without them):
 | `connection_defaults` | table | Prefill for the connection form (e.g. `{ port = 502, unit_id = 1 }`). |
 | `verification` | table | `{ status, verified_by = {…}, verified_at, notes }`. `status` normalizes to `experimental` \| `beta` \| `production` in the catalog. |
 | `tested_models` | string list | Hardware the driver has been run against. |
+| `http_hosts` | string list | Fixed outbound HTTP hosts a cloud driver talks to (e.g. `{ "api.myuplink.com" }`). The UI seeds `capabilities.http.allowed_hosts` from it. |
 
 ## `requires` / `options` field schema
 
@@ -51,7 +52,7 @@ fine without them):
 |---|---|---|
 | `name` | yes | The `config:` key this maps to. |
 | `purpose` | yes | `"always"` (validated in every mode) or `"control"` (skipped when the driver has `telemetry_only: true`). |
-| `type` | yes | `"integer"` \| `"double"` \| `"boolean"` \| `"string"`. |
+| `type` | yes | `"integer"` \| `"double"` \| `"boolean"` \| `"string"`. `string` fields also accept numeric config values — YAML leaves unquoted ids (`param_power_id: 10013`) as numbers and Lua coerces number → string natively. |
 | `min` / `max` | numeric types only | Inclusive bounds. |
 | `default` | options | Applied when the field is absent; type-checked at parse. |
 | `help` | encouraged | Hint surfaced in validation errors and UI forms. |
