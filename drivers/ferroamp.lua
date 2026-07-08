@@ -32,8 +32,10 @@ DRIVER_MANIFEST = {
       help = "Charge ceiling as a 0..1 SoC fraction. ESOs above it are counted charge-incapable for dispatch scaling." },
     { name = "discharge_floor_soc", purpose = "control", type = "double", default = 0.15, min = 0, max = 0.99,
       help = "Discharge floor as a 0..1 SoC fraction. ESOs below it are counted discharge-incapable for dispatch scaling." },
-    { name = "pplim_release_w", purpose = "control", type = "double", default = 0, min = 0, max = 1000000,
-      help = "SSO pplim published on curtail_disable, in W — set to the SSO nominal max (e.g. 15000). 0 = never publish a release (operator clears pplim from the Ferroamp portal); avoids the sticky pplim=0 trap." },
+    -- No default: ApplyDefaults injecting 0 would trip driver_init's
+    -- "must be > 0" warning on every start. Absent behaves exactly like 0.
+    { name = "pplim_release_w", purpose = "control", type = "double", min = 0, max = 1000000,
+      help = "SSO pplim published on curtail_disable, in W — set to the SSO nominal max (e.g. 15000). Absent/0 = never publish a release (operator clears pplim from the Ferroamp portal); avoids the sticky pplim=0 trap." },
   },
   provides = {
     live   = { "meter.ac_W", "meter.Hz",

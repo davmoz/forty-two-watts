@@ -50,7 +50,9 @@ DRIVER_MANIFEST = {
       help = "Inverter nameplate AC power in W (from the datasheet), used to convert curtail watt targets to a 0-100% Active Power Limit. Curtail is unavailable until set." },
   },
   provides = {
-    live   = { "pv.dc_W", "pv.mppts[]", "pv.total_generation_Wh" },
+    live   = { "pv.w", "pv.mppt1_v", "pv.mppt1_a",
+               "pv.mppt2_v", "pv.mppt2_a",
+               "pv.lifetime_wh", "pv.temp_c" },
     static = { "make", "sn" },
   },
 }

@@ -40,13 +40,14 @@ DRIVER_MANIFEST = {
   requires = {},
   options  = {},
   provides = {
-    live   = { "meter.ac_W", "meter.Hz",
-               "meter.L1_V", "meter.L2_V", "meter.L3_V",
-               "meter.L1_A", "meter.L2_A", "meter.L3_A",
-               "meter.total_import_Wh", "meter.total_export_Wh",
-               "pv.dc_W", "pv.mppts[]", "pv.total_generation_Wh",
-               "battery.dc_W", "battery.V", "battery.A",
-               "battery.SoC_nom_fract", "battery.temperature_C" },
+    live   = { "meter.w", "meter.hz",
+               "meter.l1_v", "meter.l2_v", "meter.l3_v",
+               "meter.l1_a", "meter.l2_a", "meter.l3_a",
+               "meter.import_wh", "meter.export_wh",
+               "pv.w", "pv.mppt1_v", "pv.mppt1_a",
+               "pv.mppt2_v", "pv.mppt2_a", "pv.lifetime_wh",
+               "battery.w", "battery.v", "battery.a",
+               "battery.soc", "battery.temp_c" },
     -- No sn: this register map has no stable serial read; identity
     -- resolves via ARP MAC or the configured endpoint.
     static = { "make" },

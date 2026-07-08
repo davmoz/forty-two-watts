@@ -28,9 +28,9 @@ DRIVER_MANIFEST = {
       help = "Only aggregate telemetry from this PowerShaper serial (the <sn> segment of the pixii/status/<sn>/... MQTT topics). Omit on single-unit sites — the driver latches onto the first serial it sees." },
   },
   provides = {
-    live   = { "pv.dc_W", "pv.total_generation_Wh",
-               "meter.ac_W", "meter.Hz",
-               "meter.L1_V", "meter.L2_V", "meter.L3_V" },
+    live   = { "pv.w", "pv.generation_wh",
+               "meter.w", "meter.hz",
+               "meter.l1_v", "meter.l2_v", "meter.l3_v" },
     static = { "make", "sn" },
   },
 }

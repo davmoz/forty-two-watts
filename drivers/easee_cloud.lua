@@ -26,6 +26,9 @@ DRIVER_MANIFEST = {
   display_name = "Easee Cloud",
   manufacturer = "Easee",
   protocols    = { "http" },
+  -- Fixed cloud endpoint (both the /api base and the /state observations
+  -- URL live on api.easee.com) — seeds capabilities.http.allowed_hosts.
+  http_hosts   = { "api.easee.com" },
   tested_models = { "Home", "Charge" },
   verification = {
     status      = "production",

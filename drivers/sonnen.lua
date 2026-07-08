@@ -53,7 +53,7 @@ DRIVER_MANIFEST = {
       help = "JSON API v2 Auth-Token — enable the API in the Sonnen web UI under Software-Integration and copy the token." },
   },
   provides = {
-    live   = { "battery.dc_W", "battery.SoC_nom_fract" },
+    live   = { "battery.w", "battery.soc", "battery.capacity_wh" },
     -- No sn: the latestdata endpoint carries no serial; identity
     -- resolves via ARP MAC or the configured endpoint.
     static = { "make" },

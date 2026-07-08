@@ -29,8 +29,10 @@ DRIVER_MANIFEST = {
   requires = {},
   options  = {},
   provides = {
-    live   = { "pv.dc_W", "pv.mppts[]", "pv.total_generation_Wh",
-               "battery.dc_W", "battery.V", "battery.SoC_nom_fract" },
+    live   = { "pv.w", "pv.mppt1_v", "pv.mppt1_a",
+               "pv.mppt2_v", "pv.mppt2_a",
+               "pv.lifetime_wh", "pv.temp_c", "pv.rated_w",
+               "battery.w", "battery.v", "battery.soc" },
     static = { "make", "sn" },
   },
 }

@@ -27,8 +27,9 @@
 --       lua: drivers/myuplink.lua
 --       config:
 --         client_id: "..."
---         client_secret: "..."     # masked via config_secrets
+--         client_secret: "..."     # masked via the manifest's secret=true
 --         refresh_token: "..."     # written by the OAuth connect flow; masked
+--                                  # via the server-side secret-name heuristic
 --         # device_id: "..."       # optional; auto-detected if omitted
 --       capabilities:
 --         http:
@@ -45,6 +46,8 @@ DRIVER_MANIFEST = {
   display_name = "MyUplink Heat Pump (telemetry)",
   manufacturer = "MyUplink (NIBE, Bosch, Atlantic, Daikin, ...)",
   protocols    = { "http" },
+  -- Fixed cloud endpoint — seeds capabilities.http.allowed_hosts in the UI.
+  http_hosts   = { "api.myuplink.com" },
   connection_defaults = {},
   tested_models = { "NIBE F1145", "NIBE S1255", "NIBE F730" },
   verification = { status = "experimental" },

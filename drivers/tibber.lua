@@ -35,6 +35,9 @@ DRIVER_MANIFEST = {
   display_name = "Tibber Pulse",
   manufacturer = "Tibber",
   protocols    = { "websocket", "http" },
+  -- HTTP host only (the GraphQL home query). The websocket host
+  -- (websocket-api.tibber.com) is a separate capability allowlist.
+  http_hosts   = { "api.tibber.com" },
   tested_models = { "Pulse IR", "Pulse HAN", "Pulse P1" },
   verification = {
     status = "experimental",
