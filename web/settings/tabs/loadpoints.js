@@ -168,6 +168,30 @@
     after: function (ctx) {
       var bodyEl = ctx.bodyEl, config = ctx.config;
 
+      // Self-prime registry-pinned (`driver:` ref) manifests the same way
+      // the Devices tab's fetchRefManifests does, so an EV charger
+      // installed from the Sourceful registry shows up in the driver
+      // dropdown without the operator having to visit Devices first.
+      S.manifestByRef = S.manifestByRef || {};
+      var missingRefs = {};
+      (config.drivers || []).forEach(function (d) {
+        if (d.driver && !S.manifestByRef[d.driver]) missingRefs[d.driver] = true;
+      });
+      Object.keys(missingRefs).forEach(function (ref) {
+        var at = ref.indexOf('@');
+        if (at <= 0) return;
+        var name = ref.slice(0, at), version = ref.slice(at + 1);
+        ownerFetch('/api/registry/drivers/' + encodeURIComponent(name) + '/' + encodeURIComponent(version) + '/manifest')
+          .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+          .then(function (man) {
+            S.manifestByRef[ref] = man;
+            // Re-render so the newly-resolved driver joins the dropdown.
+            ctx.captureCurrentTab();
+            ctx.renderTab('loadpoints');
+          })
+          .catch(function () { /* dropdown stays without this driver */ });
+      });
+
       // Ensure catalog is loaded so evDrivers() resolves capability tags.
       // The Devices tab also primes this; calling again is cheap because
       // the response is small and the browser caches it.
