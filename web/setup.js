@@ -286,6 +286,14 @@
     group.innerHTML = '<div class="mf-eyebrow">Device settings</div>' + html;
     manifestForm = MF.wire(group, selectedCatalog, manifestValues, { telemetryOnly: telemetryOnly });
 
+    // Hide a manifest-declared `host` field — the wizard's IP input
+    // above is the single source of truth. saveDriver syncs the current
+    // #drv-ip value into manifestValues.host, so config.host and the
+    // capability host/allowed_hosts can no longer diverge when the
+    // operator edits only one of the two.
+    var hostField = group.querySelector('.mf-field[data-mf-name="host"]');
+    if (hostField) hostField.hidden = true;
+
     var cb = document.getElementById('drv-telemetry-only');
     if (cb && !cb.dataset.mfBound) {
       cb.dataset.mfBound = '1';
@@ -317,6 +325,20 @@
 
     if (!ip) { alert('IP address is required.'); return; }
 
+    // The wizard's IP input is the single source of truth for a
+    // manifest-declared `host` field (renderManifestFields hides the
+    // duplicate). Sync the CURRENT #drv-ip value into the hidden field +
+    // manifestValues before validation so a required `host` passes and
+    // config.host matches the capability endpoint exactly.
+    if (MF && selectedCatalog) {
+      var mfNames = MF.fields(selectedCatalog).map(function (i) { return i.field.name; });
+      if (mfNames.indexOf('host') >= 0) {
+        manifestValues.host = ip;
+        var hostInput = document.querySelector('#drv-manifest-group .mf-field[data-mf-name="host"] [data-mf-input]');
+        if (hostInput) hostInput.value = ip;
+      }
+    }
+
     // Manifest-declared required fields must be filled (control-purpose
     // fields are waived in read-only mode). The form controller marks
     // the offending inputs inline.
@@ -344,7 +366,13 @@
     } else if (protocol === 'mqtt') {
       driver.capabilities.mqtt = { host: ip, port: port };
     } else if (protocol === 'http') {
-      driver.capabilities.http = { allowed_hosts: [ip] };
+      // Cloud drivers declare their fixed outbound hosts via the
+      // optional manifest `http_hosts` extension; prefer those over the
+      // local IP. Tolerates the field being absent (older manifests).
+      var httpHosts = (selectedCatalog && Array.isArray(selectedCatalog.http_hosts))
+        ? selectedCatalog.http_hosts.filter(function (h) { return typeof h === 'string' && h !== ''; })
+        : [];
+      driver.capabilities.http = { allowed_hosts: httpHosts.length > 0 ? httpHosts : [ip] };
     } else if (protocol === 'websocket') {
       driver.capabilities.websocket = { allowed_hosts: [ip] };
     } else if (protocol === 'tcp') {
