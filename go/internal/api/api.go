@@ -608,6 +608,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		if h.LastError != "" {
 			d["last_error"] = h.LastError
 		}
+		// Persistent manifest-validation warning (Registry.Add soft-start)
+		// — unlike last_error it survives successful emits, so the UI
+		// keeps flagging the degraded config until the operator fixes it.
+		if h.ConfigWarning != "" {
+			d["config_warning"] = h.ConfigWarning
+		}
 		if r := s.deps.Tel.Get(name, telemetry.DerMeter); r != nil {
 			d["meter_w"] = r.SmoothedW
 		}

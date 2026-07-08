@@ -163,6 +163,43 @@ func TestHandlePostConfigDoesNotPersistEVPasswordOnInvalidConfig(t *testing.T) {
 	}
 }
 
+// M2: a persistent manifest-validation warning set by Registry.Add's
+// soft-start must ride along in the per-driver /api/status map.
+func TestHandleStatusExposesConfigWarning(t *testing.T) {
+	tel := telemetry.NewStore()
+	tel.EnsureDriverHealth("sonnen")
+	tel.SetDriverConfigWarning("sonnen", "config violates manifest: field \"port\" = 99999 above max 65535")
+	tel.EnsureDriverHealth("clean")
+
+	srv := New(&Deps{
+		Tel:    tel,
+		Ctrl:   &control.State{},
+		CtrlMu: &sync.Mutex{},
+		CapMu:  &sync.RWMutex{},
+		CfgMu:  &sync.RWMutex{},
+		Cfg:    &config.Config{},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		Drivers map[string]map[string]any `json:"drivers"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	warn, _ := resp.Drivers["sonnen"]["config_warning"].(string)
+	if !strings.Contains(warn, "violates manifest") {
+		t.Errorf("sonnen config_warning = %q, want the manifest violation", warn)
+	}
+	if _, ok := resp.Drivers["clean"]["config_warning"]; ok {
+		t.Error("clean driver has a config_warning key, want absent")
+	}
+}
+
 func TestHandleStatusIgnoresOfflineDERInLiveBalance(t *testing.T) {
 	tel := telemetry.NewStore()
 	ctrl := &control.State{SiteMeterDriver: "site"}
