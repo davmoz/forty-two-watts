@@ -148,15 +148,27 @@ type driverCmd struct {
 }
 
 // Add spawns a driver. Returns error if the driver config is invalid or
-// the Lua script can't be loaded.
+// the Lua script can't be loaded. Every refusal (resolve failure,
+// missing source, load/capability/driver_init error) is recorded in
+// driver health so /api/drivers and /api/status show WHY the driver is
+// absent, not just that it is.
 func (r *Registry) Add(ctx context.Context, cfg config.Driver) error {
 	r.mu.Lock()
 	if _, exists := r.rec[cfg.Name]; exists {
 		r.mu.Unlock()
+		// Not recorded: the RUNNING instance's health must not be
+		// clobbered by a duplicate-add attempt.
 		return fmt.Errorf("driver %q already registered", cfg.Name)
 	}
 	r.mu.Unlock()
+	if err := r.add(ctx, cfg); err != nil {
+		r.recordAddFailure(cfg.Name, err.Error())
+		return err
+	}
+	return nil
+}
 
+func (r *Registry) add(ctx context.Context, cfg config.Driver) error {
 	// Resolve the Lua source: a pinned registry ref (cfg.Driver) wins,
 	// otherwise cfg.Lua is a local path. config.Validate enforces the
 	// exactly-one-of rule; a resolve failure (cache miss + fetch fail)
@@ -198,7 +210,6 @@ func (r *Registry) Add(ctx context.Context, cfg config.Driver) error {
 			"name", cfg.Name, "path", luaPath, "reason", err)
 		man = nil
 	case err != nil:
-		r.recordAddFailure(cfg.Name, err.Error())
 		return fmt.Errorf("driver %q: manifest: %w", cfg.Name, err)
 	}
 	if man != nil {
@@ -603,6 +614,17 @@ func (r *Registry) Names() []string {
 		out = append(out, n)
 	}
 	return out
+}
+
+// Has reports whether a driver with this name is currently running.
+// The watchdog loops use it to skip SendDefault for drivers that have
+// a health record (e.g. a recorded Add failure) but no runLoop —
+// otherwise every dispatch tick logs a spurious "not found" error.
+func (r *Registry) Has(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.rec[name]
+	return ok
 }
 
 // ShutdownAll stops every driver. Blocks until all poll loops exit.

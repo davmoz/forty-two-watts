@@ -1986,7 +1986,13 @@ func main() {
 				if !tr.Online {
 					slog.Warn("driver telemetry stale — marking offline + reverting to autonomous",
 						"name", tr.Name, "timeout", watchdogTimeout)
-					sendDriverDefault(ctx, reg, tr.Name, "watchdog")
+					// Health records exist for drivers that failed to Add
+					// (surfaced refusals) — there's no runLoop to revert,
+					// so skip the dispatch. The site-meter-stale loop below
+					// is already scoped to reg.Names().
+					if reg.Has(tr.Name) {
+						sendDriverDefault(ctx, reg, tr.Name, "watchdog")
+					}
 					bus.Publish(events.DriverLost{Driver: tr.Name, At: time.Now()})
 				} else {
 					slog.Info("driver telemetry recovered — back online", "name", tr.Name)
