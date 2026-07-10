@@ -127,6 +127,10 @@ func TestAuditVerifiedDriversDeclareProvides(t *testing.T) {
 		if e.Verification == nil {
 			continue
 		}
+		if reason, ok := metricsOnlyDrivers[e.ID]; ok {
+			t.Logf("%s: provides.live empty by exception: %s", e.ID, reason)
+			continue
+		}
 		switch e.Verification.Status {
 		case "beta", "production":
 			if len(e.Provides.Live) == 0 {
@@ -212,6 +216,19 @@ var undeclaredKeyExceptions = map[string]map[string]string{
 		"base_url":       "test-only override; production is pinned to api.myuplink.com",
 		"setup_retry_ms": "test-only override for the retry backoff",
 	},
+	"nibe_local": {
+		"base_url":        "test-only override; production builds https://host:port",
+		"setup_retry_ms":  "test-only override for the retry backoff",
+		"full_refresh_ms": "test-only override for the full register sweep cadence",
+	},
+}
+
+// metricsOnlyDrivers emit host.emit_metric diagnostics exclusively (no
+// structured DER telemetry), so an empty provides.live is truthful even
+// at beta/production verification.
+var metricsOnlyDrivers = map[string]string{
+	"nibe_local": "read-only heat-pump register map via emit_metric",
+	"myuplink":   "read-only heat-pump headline metrics via emit_metric",
 }
 
 // Every literal config key a driver body reads must be declared in its

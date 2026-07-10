@@ -116,8 +116,8 @@
       } else if (f.secret) {
         var saved = opts.secretSaved ? !!opts.secretSaved(f.name) : (typeof val === "string" && val !== "");
         var badge = saved
-          ? '<span class="creds-badge creds-saved">✓ Saved</span>'
-          : '<span class="creds-badge creds-missing">⚠ Not saved</span>';
+          ? '<span class="creds-badge creds-saved">✓ Set — not shown here</span>'
+          : '<span class="creds-badge creds-missing">⚠ Not set</span>';
         var ph = saved ? "•••••••• (leave empty to keep)" : "enter value";
         // Never echo the stored value (it's the masked placeholder from
         // the API anyway) — empty input + badge, like the cloud-password

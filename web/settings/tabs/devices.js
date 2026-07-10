@@ -220,6 +220,15 @@
             '<input type="number" data-path="drivers.' + idx + '.capabilities.modbus.unit_id" value="' + (modbus.unit_id || 1) + '">' +
             '</fieldset>';
         }
+        if (cap.http) {
+          // Local-HTTPS devices with self-signed certs (e.g. the NIBE
+          // Local REST API) pin the leaf cert by SHA-256 fingerprint —
+          // blanket insecure-skip-verify is deliberately not offered.
+          html += '<fieldset><legend>HTTPS</legend>' +
+            '<label>Certificate fingerprint (SHA-256) ' + help('Pin the device\'s self-signed HTTPS certificate by its SHA-256 fingerprint (the "fingeravtryck" in the myUplink app, or from "openssl x509 -fingerprint -sha256"). 64 hex chars; colons and case are ignored. Leave empty for normal certificate verification.') + '</label>' +
+            '<input type="text" autocomplete="off" data-path="drivers.' + idx + '.capabilities.http.tls_pin_sha256" value="' + escHtml((cap.http && cap.http.tls_pin_sha256) || '') + '" placeholder="(empty = normal verification)" style="font-family:var(--mono);font-size:0.78rem">' +
+            '</fieldset>';
+        }
         // Device settings — generated from the driver's DRIVER_MANIFEST
         // requires/options schema. Filled by the after() pass once the
         // catalog (or the registry manifest for pinned refs) resolves.

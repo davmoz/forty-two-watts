@@ -186,7 +186,7 @@ func (h *HostEnv) adaptMPPTs(m map[string]any) {
 			if !ok {
 				continue
 			}
-			_ = h.emitMetric(fmt.Sprintf("pv_mppt%d_%s", i+1, suffix), val, canon)
+			_ = h.emitMetric(fmt.Sprintf("pv_mppt%d_%s", i+1, suffix), val, canon, "", "")
 			legacy := fmt.Sprintf("mppt%d_%s", i+1, suffix)
 			if _, exists := m[legacy]; !exists {
 				m[legacy] = val
@@ -204,7 +204,7 @@ func (h *HostEnv) emitInverter(m map[string]any) error {
 		if !ok {
 			continue
 		}
-		if err := h.emitMetric(metric, v, inverterMetricUnit(key)); err != nil {
+		if err := h.emitMetric(metric, v, inverterMetricUnit(key), "", ""); err != nil {
 			return err
 		}
 		if key == "rated_W" && v > 0 {
