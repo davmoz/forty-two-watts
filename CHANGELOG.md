@@ -1,5 +1,144 @@
 # Changelog
 
+## 1.0.0
+
+### Major Changes
+
+- 6e5818b: Adopt the blixt driver standard: `DRIVER_MANIFEST` replaces the `DRIVER` metadata block in every Lua driver.
+
+  BREAKING CHANGE: driver metadata contract rewritten.
+
+  - Every driver now declares a `DRIVER_MANIFEST` table (name/version/role, typed `requires`/`options` config schema with bounds + defaults, `provides` emit contract, catalog metadata). A malformed manifest refuses to load; a MISSING manifest loads with a loud warning (legacy pass for hand-written user drivers — no validation, not shown in the catalog picker). The regex `DRIVER={…}` parser is gone; manifests are parsed in a sandboxed Lua VM, and `/api/drivers/catalog` now serves the manifest shape (`id` = file stem; verification data under `verification`; secrets via per-field `secret = true` instead of `config_secrets`).
+  - Driver config is validated against the manifest before `driver_init` — all errors reported at once, option defaults applied. New per-driver `telemetry_only: true` runs a driver read-only: control-purpose fields aren't enforced and command dispatch is refused.
+
+  MIGRATION (upgrading an existing install):
+
+  - **Custom drivers on the Pi keep running.** A user driver without a `DRIVER_MANIFEST` starts with a warning in the logs and driver health; add a manifest (copy the shape from `drivers/skeleton.lua`) to restore config validation and Settings-form rendering. A manifest with schema typos still refuses to load — check the startup log after upgrading.
+  - **Existing driver configs keep running.** Config values that violate the new manifest schemas do NOT stop the driver: it starts with a persistent warning surfaced in `/api/drivers` (`ConfigWarning`) and the logs. The hard validation gate applies only when a driver entry is added or edited via `POST /api/config` (untouched entries are grandfathered), so an upgraded install can always save unrelated settings.
+  - **`/api/drivers/catalog` consumers must update.** The old fields (`config_secrets`, `capabilities`, `verification_status`, `http_hosts`) are gone; read `requires`/`options` (with `secret: true`), `provides.live`, and `verification.status` instead.
+  - **Deye behavior fix.** `config.soc_max` / `config.soc_min` now actually take effect (a scoping bug wrote them to dead globals — reg 166 always got 100/20). Sites that set these values will see the configured SoC targets applied after upgrading.
+  - Blixt-compatible lifecycle verbs: control-capable drivers receive `driver_command("init", 0)` after `driver_init` and `("deinit", 0)` before `driver_default_mode` on clean stop; `host.set_warmup_s(n)` holds command dispatch (not polls) after the init verb.
+  - Blixt-compatible host API additions: `host.set_model`, `host.set_rated_w`, `host.set_warmup_s`, `host.now_ms`, `host.decode_u16`, `host.decode_f32_be`, `host.decode_string`, `host.write`/`host.write_registers` aliases, optional `modbus_read` kind (defaults holding), single-arg `host.log(msg)`.
+  - Canonical emit schema accepted natively: `dc_W`/`ac_W` (legacy `W` fallback), `SoC_nom_fract`, `temperature_C`, per-phase `L*_*`, `pv.mppts[]` (fanned out to `mppt{n}_v/a/w` TS series), and a new `"inverter"` diagnostics event. Signs pass through — the Sourceful axis matches ftw site convention at the driver boundary. Legacy ftw emit keys keep working.
+  - All 31 bundled drivers converted; `drivers/skeleton.lua` added as the template. Contract documented in `docs/driver-manifest.md`.
+
+### Minor Changes
+
+- f1d6ab3: Driver manifest deep-audit + canonical emit keys for test-covered drivers.
+
+  Every bundled driver's `DRIVER_MANIFEST` got a per-field audit: defaults
+  now match the in-driver fallbacks, numeric bounds follow the physics
+  (ports, SoC percentages, IEC 61851 charge currents, rated-power caps),
+  control-only fields are marked `purpose = "control"` so
+  `telemetry_only` installs don't have to fill them, every field carries
+  operator-grade help text, and `provides` declares the full canonical
+  signal set each driver actually emits. Catalog corrections: Kostal
+  connection defaults to its factory 1502/71, Victron to the Venus OS
+  system unit 100, sma_pv/ctek_hybrid verification statuses normalized to
+  real catalog values, and `static = "sn"` removed where no serial
+  exists on the wire.
+
+  The seven test-covered drivers (ferroamp, ferroamp_modbus, sungrow,
+  pixii, solaredge, solis_string, tibber) now emit the canonical
+  @srcful/data-models keys (`battery.dc_W`, `SoC_nom_fract`,
+  `meter.ac_W`, `L1_V`, `total_import_Wh`, `pv.mppts[]`, …). Signs are
+  unchanged. Minor (not patch) because the raw telemetry `Data` payloads
+  these drivers publish now carry the canonical key names — the emit
+  adapter mirrors them back onto every legacy snake_case name Go/UI/Nova
+  consumers read (`l1_a`, `charge_wh`, `import_wh`, `mppt1_v`, …), so
+  in-tree consumers are unaffected, but anything external that parsed the
+  old exact keys `battery.v`/`battery.a` from `/api` Data blobs should
+  switch to `dc_v`/`dc_a` (mirrored) or the canonical `V`/`A`.
+
+  New `manifest_audit_test.go` contract tests enforce the audit
+  mechanically: every driver manifest parses, help on every field,
+  secrets are strings, defaults inside bounds, and a two-way cross-check
+  between manifests and the `config.<key>` reads in driver bodies.
+
+- b0b740d: Driver settings forms are now generated from each driver's DRIVER_MANIFEST: typed fields (integer/double/boolean/string) with min/max bounds, help text under every field, and password inputs for secret fields — in both the Settings → Devices tab and the setup wizard. Drivers can be installed straight from the Sourceful registry in the UI, pinned to an exact version (`driver: "name@version"`), with a graceful offline fallback to bundled drivers. A new "Read-only (telemetry only)" checkbox runs a driver without control commands and relaxes control-purpose settings. POST /api/config now validates driver configs against their manifests synchronously, and the UI surfaces those errors on the exact offending field.
+- c340884: Drivers can now be fetched from the Sourceful driver registry via pinned
+  `driver: name@version` refs (mutually exclusive with `lua:`), cached
+  locally under `<state dir>/driver-cache` for deterministic, offline-safe
+  loads. New top-level `driver_registry` config section (`net`
+  devnet/testnet/mainnet, explicit `url` override, `cache_dir`;
+  `DRIVER_REGISTRY_URL` env beats both) and new `/api/registry` endpoints
+  (`GET /api/registry/drivers`, `GET /api/registry/drivers/{name}/versions`,
+  `POST /api/registry/refresh`) with a 5-minute TTL cache for the settings
+  UI.
+
+### Patch Changes
+
+- 1587b35: Driver manifest truth pass: `provides.live` now tells the truth.
+
+  The 19 bundled drivers that still emit ftw legacy snake_case keys
+  (deye, goodwe, growatt, huawei, kostal, sma, sma_pv, sofar, solis,
+  victron, fronius, fronius_smart_meter, zap, sdm630, zuidwijk_p1,
+  pixii_pv, sonnen, solaredge_pv, solaredge_legacy) declared canonical
+  `provides.live` contracts (`meter.ac_W`, `battery.SoC_nom_fract`,
+  `pv.mppts[]`, ...) that their bodies never emit. Each manifest's
+  `provides.live` is rewritten to exactly the keys the driver's
+  `host.emit` tables carry (`meter.w`, `meter.l1_v`, `battery.soc`,
+  `pv.mppt1_v`, ...), verified per emit call site. The seven
+  canonical-migrated drivers (ferroamp, ferroamp_modbus, pixii, sungrow,
+  solaredge, solis_string, tibber) are untouched.
+
+  Fixes riding along:
+
+  - **deye** now emits `freq_hz` on the meter event instead of `hz` —
+    `hz` is outside the emit adapter's vocabulary, so grid frequency
+    never reached the meter reading's typed field or the Nova adapter's
+    `freq_hz`→`Hz` mapping.
+  - **ferroamp** drops the `default = 0` on `pplim_release_w`, which made
+    ApplyDefaults inject 0 and trip a spurious
+    "pplim_release_w=0 ignored (must be > 0)" warning on every start.
+    Absent/0 both mean "never publish a release", as before.
+  - **myuplink / easee_cloud / tibber** declare the new optional
+    `http_hosts` manifest field with their pinned cloud endpoints, ready
+    for the UI to seed `capabilities.http.allowed_hosts` (Go-side parse
+    lands separately; the parser ignores unknown manifest keys).
+  - **myuplink** header comment no longer references the removed
+    `config_secrets` mechanism.
+
+- eeb50a7: Driver-standard review fixes across the Go core.
+
+  Safety-critical: control arming is now lazy — a driver on an idle-mode
+  site never receives the `init` control verb (no Remote-Mode enable, no
+  device-watchdog arm) until the first real command dispatch, and
+  `deinit` on clean stop fires only for armed drivers. Warmup holds
+  (`host.set_warmup_s`) start at arm time and keep suppressing commands
+  while polls run.
+
+  Robustness + operator visibility: legacy drivers whose top-level code
+  fails in the manifest sandbox (e.g. `os.time()`) load again via the
+  warn-and-load path; registry fetches are validated (manifest-mandatory,
+  2 MB truncation detected) before anything lands in the offline cache,
+  with unique temp files for concurrent resolves; every driver Add
+  refusal now surfaces in driver health, and `/api/status` carries the
+  persistent `config_warning` alongside `last_error`.
+
+  Secrets: `driver:` registry-ref entries get their manifest-declared
+  secrets masked in `GET /api/config` (resolved cache-only, never the
+  network), and a name heuristic (`password|token|secret|api_key`) masks
+  and restores sensitive keys even when no manifest is resolvable
+  (legacy drivers, rotated `refresh_token`).
+
+  Smaller fixes: manifest parses are cached per (path, mtime, size);
+  manifest `string` fields accept unquoted YAML numeric ids; the new
+  `http_hosts` manifest field is parsed for UI consumption; the driver
+  registry defaults to mainnet; driver refs tolerate stray whitespace;
+  re-enabling a disabled driver now faces the config manifest gate; and
+  the watchdog no longer dispatches default-mode to drivers that never
+  started.
+
+- 1e9a482: Web review fixes: Devices-tab scope crash, catalog-failure fallback, wizard host sync.
+
+  - The Settings → Devices tab no longer crashes with a ReferenceError when the config contains a MyUplink (OAuth) driver — the async manifest-slot fill pass now has the `help` renderer in scope.
+  - A failed `/api/drivers/catalog` fetch no longer leaves the Devices tab stuck on "Loading catalog…": configured drivers fall back to the raw config editor, the battery-capacity reveal still runs, and the picker reports the failure.
+  - Setup wizard step 5 hides the duplicate manifest `host` field; the wizard's IP input is the single source of truth and is synced into `config.host` on save, so it can no longer diverge from the capability endpoint.
+  - Drivers added from the catalog or the wizard seed `capabilities.http.allowed_hosts` from the manifest's declared `http_hosts` cloud endpoints when present.
+  - The Loadpoints tab self-primes registry-pinned (`driver:` ref) manifests, so registry-installed EV chargers appear in the dropdown without visiting Devices first.
+  - Manifest-validation save errors are routed to fields from the structured `manifest_errors` array instead of splitting the joined error string, so help texts containing "; " are no longer mangled.
+
 ## 0.126.0
 
 ### Minor Changes
